@@ -1,8 +1,8 @@
-# Compile tous les mods de Valheim.Mods.sln et produit valheim-modpack.zip.
+# Builds every mod in Valheim.Mods.sln and produces valheim-modpack.zip.
 #
-# Les DLL du jeu ne sont pas dans le dépôt (propriétaires) : on télécharge le serveur dédié Valheim par SteamCMD
-# en connexion anonyme, qui contient le même code de jeu. BepInEx est installé par install.ps1, ce qui teste
-# le script au passage. Un tag v* publie une release avec l'archive, que install.ps1 télécharge.
+# The game DLLs are not in the repository (proprietary): the Valheim dedicated server, which contains the same game
+# code, is downloaded with SteamCMD using an anonymous login. BepInEx is installed by install.ps1, which tests the
+# script along the way. A v* tag publishes a release with the archive, which install.ps1 downloads.
 
 name: Build
 
@@ -26,10 +26,10 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
-      # Seul valheim_server_Data\Managed sert à compiler. Il est mis en cache sous le buildid Steam du serveur,
-      # qui change à chaque patch : les 2 Go du serveur ne sont retéléchargés qu'après une mise à jour de Valheim.
-      - name: SteamCMD et buildid du serveur dédié
-        id: serveur
+      # Only valheim_server_Data\Managed is needed to build. It is cached under the server's Steam build id, which
+      # changes with every patch: the 2 GB server is only downloaded again after a Valheim update.
+      - name: SteamCMD and dedicated server build id
+        id: server
         shell: pwsh
         run: |
           $steamcmd = Join-Path $env:RUNNER_TEMP 'steamcmd'
@@ -38,99 +38,99 @@ jobs:
           Expand-Archive "$steamcmd\steamcmd.zip" $steamcmd -Force
           "STEAMCMD=$steamcmd\steamcmd.exe" >> $env:GITHUB_ENV
 
-          # Premier lancement à part : SteamCMD s'y met à jour, et une commande passée dans le même lancement
-          # échoue (« Missing configuration »).
+          # Separate first launch: SteamCMD updates itself during it, and any command passed to that same launch
+          # fails ("Missing configuration").
           & "$steamcmd\steamcmd.exe" +quit | Out-Null
 
           $buildid = $null
-          for ($essai = 1; $essai -le 3 -and -not $buildid; $essai++) {
+          for ($attempt = 1; $attempt -le 3 -and -not $buildid; $attempt++) {
             $info = & "$steamcmd\steamcmd.exe" +login anonymous +app_info_update 1 +app_info_print 896660 +quit | Out-String
             $m = [regex]::Match($info, '"branches"\s*\{\s*"public"\s*\{\s*"buildid"\s*"(\d+)"')
             if ($m.Success) { $buildid = $m.Groups[1].Value }
           }
           if (-not $buildid) {
-            # Sans buildid, clé unique à ce run : le cache ne sert pas, mais le build continue.
-            Write-Host "::warning::buildid du serveur dédié illisible, cache ignoré pour ce run"
-            $buildid = "inconnu-$env:GITHUB_RUN_ID"
+            # Without a build id, the key is unique to this run: no cache, but the build goes on.
+            Write-Host "::warning::Could not read the dedicated server build id, cache skipped for this run"
+            $buildid = "unknown-$env:GITHUB_RUN_ID"
           }
-          Write-Host "buildid du serveur dédié : $buildid"
+          Write-Host "Dedicated server build id: $buildid"
           "buildid=$buildid" >> $env:GITHUB_OUTPUT
           $global:LASTEXITCODE = 0
 
-      - name: Cache des DLL du jeu
+      - name: Game DLL cache
         id: cache
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}\valheim\valheim_server_Data\Managed
-          key: valheim-server-managed-${{ steps.serveur.outputs.buildid }}
+          key: valheim-server-managed-${{ steps.server.outputs.buildid }}
 
-      - name: Téléchargement du serveur dédié
+      - name: Download dedicated server
         if: steps.cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $valheim = Join-Path $env:RUNNER_TEMP 'valheim'
           $managed = Join-Path $valheim 'valheim_server_Data\Managed'
-          for ($essai = 1; $essai -le 3 -and -not (Test-Path "$managed\assembly_valheim.dll"); $essai++) {
-            Write-Host "SteamCMD, essai $essai"
+          for ($attempt = 1; $attempt -le 3 -and -not (Test-Path "$managed\assembly_valheim.dll"); $attempt++) {
+            Write-Host "SteamCMD, attempt $attempt"
             & $env:STEAMCMD +force_install_dir $valheim +login anonymous +app_update 896660 validate +quit
           }
           $global:LASTEXITCODE = 0
 
-      - name: Vérification des DLL du jeu
+      - name: Check game DLLs
         shell: pwsh
         run: |
           $valheim = Join-Path $env:RUNNER_TEMP 'valheim'
           $managed = Join-Path $valheim 'valheim_server_Data\Managed'
           foreach ($dll in 'assembly_valheim', 'assembly_utils', 'assembly_guiutils', 'Unity.TextMeshPro', 'UnityEngine') {
-            if (-not (Test-Path "$managed\$dll.dll")) { throw "DLL absente du serveur dédié : $dll.dll" }
+            if (-not (Test-Path "$managed\$dll.dll")) { throw "Missing from the dedicated server: $dll.dll" }
           }
           $version = ./.github/scripts/Get-ValheimVersion.ps1 "$managed\assembly_valheim.dll"
-          Write-Host "Compilé contre Valheim $version"
-          $cache = if ('${{ steps.cache.outputs.cache-hit }}' -eq 'true') { 'oui' } else { 'non, serveur téléchargé' }
+          Write-Host "Building against Valheim $version"
+          $cache = if ('${{ steps.cache.outputs.cache-hit }}' -eq 'true') { 'hit' } else { 'miss, server downloaded' }
           @(
-            '### DLL du jeu'
+            '### Game DLLs'
             ''
-            "- Valheim : $version"
-            "- buildid Steam du serveur dédié : ${{ steps.serveur.outputs.buildid }}"
-            "- Cache : $cache"
+            "- Valheim: $version"
+            "- Dedicated server Steam build id: ${{ steps.server.outputs.buildid }}"
+            "- Cache: $cache"
           ) -join "`n" >> $env:GITHUB_STEP_SUMMARY
           "VALHEIM_INSTALL=$valheim" >> $env:GITHUB_ENV
 
-      - name: BepInEx (via install.ps1)
+      - name: BepInEx (through install.ps1)
         shell: pwsh
         run: ./install.ps1 -ValheimPath $env:VALHEIM_INSTALL -BepInExOnly
 
-      - name: Compilation
+      - name: Build
         run: dotnet build Valheim.Mods.sln -c Release
 
-      - name: Archive valheim-modpack.zip
+      - name: Package valheim-modpack.zip
         shell: pwsh
         run: |
-          $paquet = Join-Path $env:RUNNER_TEMP 'paquet'
-          $plugins = Join-Path $paquet 'BepInEx\plugins'
-          $projets = dotnet sln Valheim.Mods.sln list | Where-Object { $_ -like '*.csproj' }
-          foreach ($projet in $projets) {
-            $nom = ([xml](Get-Content $projet)).Project.PropertyGroup.AssemblyName | Where-Object { $_ } | Select-Object -First 1
-            $dll = Join-Path (Split-Path $projet) "bin\Release\$nom.dll"
-            if (-not (Test-Path $dll)) { throw "DLL introuvable : $dll" }
-            New-Item -ItemType Directory -Force (Join-Path $plugins $nom) | Out-Null
-            Copy-Item $dll (Join-Path $plugins $nom)
-            Write-Host "$nom $((Get-Item $dll).VersionInfo.FileVersion)"
+          $package = Join-Path $env:RUNNER_TEMP 'package'
+          $plugins = Join-Path $package 'BepInEx\plugins'
+          $projects = dotnet sln Valheim.Mods.sln list | Where-Object { $_ -like '*.csproj' }
+          foreach ($project in $projects) {
+            $name = ([xml](Get-Content $project)).Project.PropertyGroup.AssemblyName | Where-Object { $_ } | Select-Object -First 1
+            $dll = Join-Path (Split-Path $project) "bin\Release\$name.dll"
+            if (-not (Test-Path $dll)) { throw "DLL not found: $dll" }
+            New-Item -ItemType Directory -Force (Join-Path $plugins $name) | Out-Null
+            Copy-Item $dll (Join-Path $plugins $name)
+            Write-Host "$name $((Get-Item $dll).VersionInfo.FileVersion)"
           }
-          Compress-Archive -Path "$paquet\*" -DestinationPath valheim-modpack.zip -Force
+          Compress-Archive -Path "$package\*" -DestinationPath valheim-modpack.zip -Force
 
-      - name: Test d'installation dans un dossier vierge
+      - name: Test install into an empty folder
         shell: pwsh
         run: |
           $test = Join-Path $env:RUNNER_TEMP 'install-test'
           New-Item -ItemType Directory -Force $test | Out-Null
           ./install.ps1 -ValheimPath $test -ZipPath valheim-modpack.zip
-          $attendus = @('BepInEx\core\BepInEx.dll', 'winhttp.dll') +
-            (Get-ChildItem "$env:RUNNER_TEMP\paquet\BepInEx\plugins" -Directory | ForEach-Object { "BepInEx\plugins\$($_.Name)\$($_.Name).dll" })
-          foreach ($f in $attendus) {
-            if (-not (Test-Path (Join-Path $test $f))) { throw "Absent après installation : $f" }
+          $expected = @('BepInEx\core\BepInEx.dll', 'winhttp.dll') +
+            (Get-ChildItem "$env:RUNNER_TEMP\package\BepInEx\plugins" -Directory | ForEach-Object { "BepInEx\plugins\$($_.Name)\$($_.Name).dll" })
+          foreach ($file in $expected) {
+            if (-not (Test-Path (Join-Path $test $file))) { throw "Missing after install: $file" }
           }
-          Write-Host "Installation vérifiée : $($attendus.Count) fichiers"
+          Write-Host "Install verified: $($expected.Count) files"
 
       - uses: actions/upload-artifact@v7
         with:

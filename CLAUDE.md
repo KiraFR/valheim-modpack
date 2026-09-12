@@ -22,6 +22,7 @@ from the IL of `Version..cctor` (the DLL's own version is 0.0.0.0) for the build
 installs BepInEx and smoke-tests the package through `install.ps1`, so a change to the script is exercised by CI.
 A `v*` tag publishes a release with `valheim-modpack.zip`, which `install.ps1` downloads. Every project in the
 solution ends up in the package; server installs (`-Server`) only take the mods listed in `$ServerMods`.
+The CI workflow and everything under `.github/` are written in English (comments, step names, messages).
 `install.ps1` must stay compatible with Windows PowerShell 5.1 and be written in English, ASCII only (no BOM), unlike the mods' French convention: 5.1 decodes `irm` downloads and BOM-less `-File` scripts as a legacy code page, and a UTF-8 BOM turns into
 garbage before `<#` that breaks parsing of the whole script.
 
