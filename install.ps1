@@ -1,15 +1,15 @@
 <#
 .SYNOPSIS
-    Installe le modpack Valheim (BepInEx + mods) dans le dossier du jeu ou du serveur dedie.
+    Installs the Valheim modpack (BepInEx + mods) into the game or dedicated server folder.
 
 .DESCRIPTION
-    - Trouve Valheim tout seul via Steam (registre + toutes les bibliotheques de libraryfolders.vdf).
-    - Installe BepInExPack Valheim depuis Thunderstore s'il est absent.
-    - Telecharge valheim-modpack.zip depuis la derniere release GitHub et copie chaque mod dans
-      BepInEx/plugins/<Mod>/, en remplacant l'ancienne version. Les autres mods et les .cfg ne sont pas touches.
-    - Avec -Server, cible le serveur dedie et n'installe que les mods utiles cote serveur.
+    - Finds Valheim through Steam (registry + every library listed in libraryfolders.vdf).
+    - Installs BepInExPack Valheim from Thunderstore if it is missing.
+    - Downloads valheim-modpack.zip from the latest GitHub release and copies each mod into
+      BepInEx/plugins/<Mod>/, replacing the previous version. Other mods and .cfg files are left untouched.
+    - With -Server, targets the dedicated server and only installs the mods needed server-side.
 
-    Valheim doit etre ferme pendant l'installation.
+    Valheim must be closed during the installation.
 
 .EXAMPLE
     irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install.ps1 | iex
@@ -18,192 +18,192 @@
     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install.ps1))) -Server
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File install.ps1 -ValheimPath "D:\Jeux\Valheim"
+    powershell -ExecutionPolicy Bypass -File install.ps1 -ValheimPath "D:\Games\Valheim"
 #>
 [CmdletBinding()]
 param(
-    # Dossier de Valheim. Par defaut : detecte via Steam.
+    # Valheim folder. Default: detected through Steam.
     [string]$ValheimPath,
-    # Cible le serveur dedie (Valheim dedicated server) au lieu du jeu.
+    # Targets the dedicated server (Valheim dedicated server) instead of the game.
     [switch]$Server,
-    # Release a installer, par exemple v1.2.0. Par defaut : la derniere.
+    # Release to install, for example v1.2.0. Default: the latest one.
     [string]$Version = 'latest',
-    # Archive locale du modpack a utiliser au lieu de la telecharger.
+    # Local modpack archive to use instead of downloading it.
     [string]$ZipPath,
-    # N'installe que BepInEx, sans les mods.
+    # Installs BepInEx only, without the mods.
     [switch]$BepInExOnly,
-    # Reinstalle BepInEx meme s'il est deja present.
+    # Reinstalls BepInEx even if it is already present.
     [switch]$ForceBepInEx
 )
 
 $ErrorActionPreference = 'Stop'
-# La barre de progression rend Invoke-WebRequest extremement lent sous Windows PowerShell 5.1.
+# The progress bar makes Invoke-WebRequest extremely slow on Windows PowerShell 5.1.
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-$Depot = 'KiraFR/valheim-modpack'
-$NomArchive = 'valheim-modpack.zip'
+$Repository = 'KiraFR/valheim-modpack'
+$ArchiveName = 'valheim-modpack.zip'
 $BepInExApi = 'https://thunderstore.io/api/experimental/package/denikson/BepInExPack_Valheim/'
 
-# Mods a installer sur un serveur dedie : StackMax (les coffres rabotent les piles cote serveur) et PortalMenu
-# (seul le serveur connait tous les portails du monde). Les autres sont purement clients.
-$ModsServeur = @('StackMax', 'PortalMenu')
+# Mods to install on a dedicated server: StackMax (chests clamp stacks server-side) and PortalMenu
+# (only the server knows every portal in the world). The others are client-only.
+$ServerMods = @('StackMax', 'PortalMenu')
 
-function Write-Etape([string]$texte) {
-    Write-Host "==> $texte" -ForegroundColor Cyan
+function Write-Step([string]$text) {
+    Write-Host "==> $text" -ForegroundColor Cyan
 }
 
-function New-DossierTemp {
-    $chemin = Join-Path ([IO.Path]::GetTempPath()) ('valheim-modpack-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $chemin | Out-Null
-    return $chemin
+function New-TempFolder {
+    $path = Join-Path ([IO.Path]::GetTempPath()) ('valheim-modpack-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $path | Out-Null
+    return $path
 }
 
-function Get-BibliothequesSteam {
-    $racines = @()
-    foreach ($cle in 'HKCU:\Software\Valve\Steam', 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam', 'HKLM:\SOFTWARE\Valve\Steam') {
-        $proprietes = Get-ItemProperty -Path $cle -ErrorAction SilentlyContinue
-        if ($proprietes.SteamPath) { $racines += $proprietes.SteamPath }
-        if ($proprietes.InstallPath) { $racines += $proprietes.InstallPath }
+function Get-SteamLibraries {
+    $roots = @()
+    foreach ($key in 'HKCU:\Software\Valve\Steam', 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam', 'HKLM:\SOFTWARE\Valve\Steam') {
+        $properties = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+        if ($properties.SteamPath) { $roots += $properties.SteamPath }
+        if ($properties.InstallPath) { $roots += $properties.InstallPath }
     }
-    $racines += Join-Path ${env:ProgramFiles(x86)} 'Steam'
+    $roots += Join-Path ${env:ProgramFiles(x86)} 'Steam'
 
-    $bibliotheques = @()
-    foreach ($racine in $racines) {
-        $racine = $racine -replace '/', '\'
-        if (-not (Test-Path $racine)) { continue }
-        $bibliotheques += $racine
-        # Chaque disque ou Steam installe des jeux est liste dans libraryfolders.vdf ("path" "D:\\SteamLibrary").
-        $vdf = Join-Path $racine 'steamapps\libraryfolders.vdf'
+    $libraries = @()
+    foreach ($root in $roots) {
+        $root = $root -replace '/', '\'
+        if (-not (Test-Path $root)) { continue }
+        $libraries += $root
+        # Every drive where Steam installs games is listed in libraryfolders.vdf ("path" "D:\\SteamLibrary").
+        $vdf = Join-Path $root 'steamapps\libraryfolders.vdf'
         if (Test-Path $vdf) {
             foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) {
-                $bibliotheques += $m.Groups[1].Value -replace '\\\\', '\'
+                $libraries += $m.Groups[1].Value -replace '\\\\', '\'
             }
         }
     }
-    return $bibliotheques | ForEach-Object { $_.TrimEnd('\') } | Sort-Object -Unique
+    return $libraries | ForEach-Object { $_.TrimEnd('\') } | Sort-Object -Unique
 }
 
-function Find-Valheim([bool]$serveur) {
-    if ($serveur) { $dossier = 'Valheim dedicated server'; $exe = 'valheim_server.exe' }
-    else { $dossier = 'Valheim'; $exe = 'valheim.exe' }
+function Find-Valheim([bool]$server) {
+    if ($server) { $folder = 'Valheim dedicated server'; $exe = 'valheim_server.exe' }
+    else { $folder = 'Valheim'; $exe = 'valheim.exe' }
 
-    foreach ($bibliotheque in Get-BibliothequesSteam) {
-        $chemin = Join-Path $bibliotheque "steamapps\common\$dossier"
-        if (Test-Path (Join-Path $chemin $exe)) { return $chemin }
+    foreach ($library in Get-SteamLibraries) {
+        $path = Join-Path $library "steamapps\common\$folder"
+        if (Test-Path (Join-Path $path $exe)) { return $path }
     }
     return $null
 }
 
-function Install-BepInEx([string]$cible) {
-    Write-Etape 'Telechargement de BepInExPack Valheim (Thunderstore)'
-    $paquet = Invoke-RestMethod -Uri $BepInExApi -UseBasicParsing
-    $temp = New-DossierTemp
+function Install-BepInEx([string]$target) {
+    Write-Step 'Downloading BepInExPack Valheim (Thunderstore)'
+    $package = Invoke-RestMethod -Uri $BepInExApi -UseBasicParsing
+    $temp = New-TempFolder
     try {
         $zip = Join-Path $temp 'BepInExPack_Valheim.zip'
-        Invoke-WebRequest -Uri $paquet.latest.download_url -OutFile $zip -UseBasicParsing
+        Invoke-WebRequest -Uri $package.latest.download_url -OutFile $zip -UseBasicParsing
         Expand-Archive -Path $zip -DestinationPath (Join-Path $temp 'x')
 
-        # Le contenu a copier dans le dossier du jeu est celui qui contient winhttp.dll (le chargeur Doorstop).
+        # The content to copy into the game folder is the folder holding winhttp.dll (the Doorstop loader).
         $winhttp = Get-ChildItem (Join-Path $temp 'x') -Recurse -Filter 'winhttp.dll' | Select-Object -First 1
-        if (-not $winhttp) { throw "Archive BepInExPack inattendue : winhttp.dll introuvable." }
-        Copy-Item -Path (Join-Path $winhttp.DirectoryName '*') -Destination $cible -Recurse -Force
-        Write-Host "    BepInExPack Valheim $($paquet.latest.version_number) installe"
+        if (-not $winhttp) { throw "Unexpected BepInExPack archive: winhttp.dll not found." }
+        Copy-Item -Path (Join-Path $winhttp.DirectoryName '*') -Destination $target -Recurse -Force
+        Write-Host "    BepInExPack Valheim $($package.latest.version_number) installed"
     }
     finally {
         Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-function Install-Mods([string]$cible, [string]$zip, [bool]$serveur) {
-    $temp = New-DossierTemp
+function Install-Mods([string]$target, [string]$zip, [bool]$server) {
+    $temp = New-TempFolder
     try {
         if (-not $zip) {
-            # L'API renvoie la derniere release publiee (hors brouillons et pre-releases) avec son tag et ses fichiers.
-            if ($Version -eq 'latest') { $api = "https://api.github.com/repos/$Depot/releases/latest" }
-            else { $api = "https://api.github.com/repos/$Depot/releases/tags/$Version" }
+            # The API returns the latest published release (drafts and pre-releases excluded) with its tag and files.
+            if ($Version -eq 'latest') { $api = "https://api.github.com/repos/$Repository/releases/latest" }
+            else { $api = "https://api.github.com/repos/$Repository/releases/tags/$Version" }
             try {
                 $release = Invoke-RestMethod -Uri $api -UseBasicParsing
             }
             catch {
-                $quoi = "la release $Version"
-                if ($Version -eq 'latest') { $quoi = 'aucune release publiee' }
-                throw "Modpack introuvable ($quoi) sur https://github.com/$Depot/releases : $($_.Exception.Message)"
+                $what = "release $Version"
+                if ($Version -eq 'latest') { $what = 'no published release' }
+                throw "Modpack not found ($what) on https://github.com/$Repository/releases: $($_.Exception.Message)"
             }
-            $asset = $release.assets | Where-Object { $_.name -eq $NomArchive } | Select-Object -First 1
-            if (-not $asset) { throw "La release $($release.tag_name) ne contient pas $NomArchive." }
+            $asset = $release.assets | Where-Object { $_.name -eq $ArchiveName } | Select-Object -First 1
+            if (-not $asset) { throw "Release $($release.tag_name) does not contain $ArchiveName." }
 
-            Write-Etape "Telechargement du modpack $($release.tag_name)"
-            $zip = Join-Path $temp $NomArchive
+            Write-Step "Downloading modpack $($release.tag_name)"
+            $zip = Join-Path $temp $ArchiveName
             Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
         }
 
         Expand-Archive -Path $zip -DestinationPath (Join-Path $temp 'x')
         $sources = Join-Path $temp 'x\BepInEx\plugins'
-        if (-not (Test-Path $sources)) { throw "Archive du modpack inattendue : BepInEx\plugins absent." }
+        if (-not (Test-Path $sources)) { throw "Unexpected modpack archive: BepInEx\plugins is missing." }
 
-        $plugins = Join-Path $cible 'BepInEx\plugins'
+        $plugins = Join-Path $target 'BepInEx\plugins'
         New-Item -ItemType Directory -Force -Path $plugins | Out-Null
 
-        Write-Etape "Installation des mods dans $plugins"
-        $installes = 0
+        Write-Step "Installing mods into $plugins"
+        $installed = 0
         foreach ($mod in Get-ChildItem $sources -Directory) {
-            if ($serveur -and $ModsServeur -notcontains $mod.Name) { continue }
+            if ($server -and $ServerMods -notcontains $mod.Name) { continue }
 
-            # Le dossier du mod est remplace en entier pour ne pas laisser de fichier d'une ancienne version.
+            # The whole mod folder is replaced so no file from an older version is left behind.
             $destination = Join-Path $plugins $mod.Name
             if (Test-Path $destination) { Remove-Item $destination -Recurse -Force }
             Copy-Item -Path $mod.FullName -Destination $destination -Recurse
 
             $dll = Join-Path $destination "$($mod.Name).dll"
-            $version = ''
-            if (Test-Path $dll) { $version = (Get-Item $dll).VersionInfo.FileVersion -replace '\.0$', '' }
-            Write-Host ("    {0,-12} {1}" -f $mod.Name, $version)
-            $installes++
+            $modVersion = ''
+            if (Test-Path $dll) { $modVersion = (Get-Item $dll).VersionInfo.FileVersion -replace '\.0$', '' }
+            Write-Host ("    {0,-12} {1}" -f $mod.Name, $modVersion)
+            $installed++
         }
-        if ($installes -eq 0) { throw "Aucun mod trouve dans l'archive." }
+        if ($installed -eq 0) { throw "No mod found in the archive." }
     }
     finally {
         Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-# ----- Programme -----
+# ----- Main -----
 
 if ($ValheimPath) {
-    if (-not (Test-Path $ValheimPath -PathType Container)) { throw "Dossier introuvable : $ValheimPath" }
-    $cible = (Resolve-Path $ValheimPath).Path
+    if (-not (Test-Path $ValheimPath -PathType Container)) { throw "Folder not found: $ValheimPath" }
+    $target = (Resolve-Path $ValheimPath).Path
 }
 else {
-    $cible = Find-Valheim $Server.IsPresent
-    if (-not $cible) {
-        $quoi = 'Valheim'
-        if ($Server) { $quoi = 'Valheim dedicated server' }
-        throw "$quoi introuvable dans les bibliotheques Steam. Indiquez le dossier avec -ValheimPath."
+    $target = Find-Valheim $Server.IsPresent
+    if (-not $target) {
+        $what = 'Valheim'
+        if ($Server) { $what = 'Valheim dedicated server' }
+        throw "$what not found in the Steam libraries. Pass the folder with -ValheimPath."
     }
 }
-Write-Etape "Dossier cible : $cible"
+Write-Step "Target folder: $target"
 
-# Seul un Valheim lance depuis le dossier cible gene : winhttp.dll y est verrouille, et les mods remplaces ne
-# seraient de toute facon charges qu'au prochain lancement. Un chemin illisible compte comme bloquant.
-$enCours = Get-Process -Name 'valheim', 'valheim_server' -ErrorAction SilentlyContinue | Where-Object {
-    -not $_.Path -or $_.Path.StartsWith($cible.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+# Only a Valheim started from the target folder is a problem: winhttp.dll is locked there, and replaced mods
+# would only load on the next launch anyway. An unreadable process path counts as blocking.
+$running = Get-Process -Name 'valheim', 'valheim_server' -ErrorAction SilentlyContinue | Where-Object {
+    -not $_.Path -or $_.Path.StartsWith($target.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
 }
-if ($enCours) {
-    throw "Fermez $($enCours[0].ProcessName) avant d'installer : il tourne depuis $cible."
+if ($running) {
+    throw "Close $($running[0].ProcessName) before installing: it is running from $target."
 }
 
 if ($ZipPath) { $ZipPath = (Resolve-Path $ZipPath).Path }
 
-if ($ForceBepInEx -or -not (Test-Path (Join-Path $cible 'BepInEx\core\BepInEx.dll'))) {
-    Install-BepInEx $cible
+if ($ForceBepInEx -or -not (Test-Path (Join-Path $target 'BepInEx\core\BepInEx.dll'))) {
+    Install-BepInEx $target
 }
 else {
-    Write-Etape 'BepInEx deja installe'
+    Write-Step 'BepInEx already installed'
 }
 
 if (-not $BepInExOnly) {
-    Install-Mods $cible $ZipPath $Server.IsPresent
+    Install-Mods $target $ZipPath $Server.IsPresent
 }
 
-Write-Etape 'Termine. Lancez Valheim normalement depuis Steam.'
+Write-Step 'Done. Launch Valheim from Steam as usual.'
