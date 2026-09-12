@@ -31,7 +31,9 @@ Avec des paramètres, via `& ([scriptblock]::Create((irm <url>))) <paramètres>`
 `.github/workflows/build.yml` compile la solution à chaque push et pull request, sur Windows. Les DLL du jeu ne
 sont pas dans le dépôt : la CI télécharge le serveur dédié Valheim par SteamCMD (connexion anonyme), dont
 `valheim_server_Data/Managed` contient le même code de jeu (`Directory.Build.props` bascule dessus quand
-`valheim_Data` est absent), puis installe BepInEx avec `install.ps1`. Elle produit l'artefact
+`valheim_Data` est absent), puis installe BepInEx avec `install.ps1`. Ce dossier `Managed` est mis en cache sous le
+buildid Steam du serveur : les 2 Go du serveur ne sont retéléchargés qu'après un patch de Valheim, et le résumé du
+build indique la version du jeu contre laquelle les mods ont été compilés. Elle produit l'artefact
 `valheim-modpack.zip` (`BepInEx/plugins/<Mod>/<Mod>.dll` pour chaque projet de la solution) et vérifie
 l'installation de cette archive dans un dossier vierge.
 

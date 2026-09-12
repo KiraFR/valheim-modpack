@@ -33,7 +33,9 @@ With parameters, use `& ([scriptblock]::Create((irm <url>))) <parameters>` or `p
 `.github/workflows/build.yml` builds the solution on every push and pull request, on Windows. The game DLLs are
 not in the repository: the CI downloads the Valheim dedicated server with SteamCMD (anonymous login), whose
 `valheim_server_Data/Managed` folder contains the same game code (`Directory.Build.props` switches to it when
-`valheim_Data` is missing), then installs BepInEx with `install.ps1`. It produces the `valheim-modpack.zip`
+`valheim_Data` is missing), then installs BepInEx with `install.ps1`. That `Managed` folder is cached under the
+server's Steam build id, so the 2 GB server is only downloaded again after a Valheim patch; the build summary shows
+the game version the mods were compiled against. It produces the `valheim-modpack.zip`
 artifact (`BepInEx/plugins/<Mod>/<Mod>.dll` for each project in the solution) and checks that this archive
 installs correctly into an empty folder.
 

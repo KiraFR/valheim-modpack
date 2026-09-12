@@ -26,27 +26,75 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
-      - name: Serveur dédié Valheim (DLL du jeu)
+      # Seul valheim_server_Data\Managed sert à compiler. Il est mis en cache sous le buildid Steam du serveur,
+      # qui change à chaque patch : les 2 Go du serveur ne sont retéléchargés qu'après une mise à jour de Valheim.
+      - name: SteamCMD et buildid du serveur dédié
+        id: serveur
         shell: pwsh
         run: |
           $steamcmd = Join-Path $env:RUNNER_TEMP 'steamcmd'
-          $valheim = Join-Path $env:RUNNER_TEMP 'valheim'
           New-Item -ItemType Directory -Force $steamcmd | Out-Null
           Invoke-WebRequest https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip -OutFile "$steamcmd\steamcmd.zip"
           Expand-Archive "$steamcmd\steamcmd.zip" $steamcmd -Force
+          "STEAMCMD=$steamcmd\steamcmd.exe" >> $env:GITHUB_ENV
 
-          # SteamCMD se met à jour au premier lancement et sort alors souvent en erreur (code 7) sans rien
-          # installer : on juge sur la présence des fichiers, avec quelques essais.
+          # Premier lancement à part : SteamCMD s'y met à jour, et une commande passée dans le même lancement
+          # échoue (« Missing configuration »).
+          & "$steamcmd\steamcmd.exe" +quit | Out-Null
+
+          $buildid = $null
+          for ($essai = 1; $essai -le 3 -and -not $buildid; $essai++) {
+            $info = & "$steamcmd\steamcmd.exe" +login anonymous +app_info_update 1 +app_info_print 896660 +quit | Out-String
+            $m = [regex]::Match($info, '"branches"\s*\{\s*"public"\s*\{\s*"buildid"\s*"(\d+)"')
+            if ($m.Success) { $buildid = $m.Groups[1].Value }
+          }
+          if (-not $buildid) {
+            # Sans buildid, clé unique à ce run : le cache ne sert pas, mais le build continue.
+            Write-Host "::warning::buildid du serveur dédié illisible, cache ignoré pour ce run"
+            $buildid = "inconnu-$env:GITHUB_RUN_ID"
+          }
+          Write-Host "buildid du serveur dédié : $buildid"
+          "buildid=$buildid" >> $env:GITHUB_OUTPUT
+          $global:LASTEXITCODE = 0
+
+      - name: Cache des DLL du jeu
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}\valheim\valheim_server_Data\Managed
+          key: valheim-server-managed-${{ steps.serveur.outputs.buildid }}
+
+      - name: Téléchargement du serveur dédié
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $valheim = Join-Path $env:RUNNER_TEMP 'valheim'
           $managed = Join-Path $valheim 'valheim_server_Data\Managed'
           for ($essai = 1; $essai -le 3 -and -not (Test-Path "$managed\assembly_valheim.dll"); $essai++) {
             Write-Host "SteamCMD, essai $essai"
-            & "$steamcmd\steamcmd.exe" +force_install_dir $valheim +login anonymous +app_update 896660 validate +quit
+            & $env:STEAMCMD +force_install_dir $valheim +login anonymous +app_update 896660 validate +quit
           }
+          $global:LASTEXITCODE = 0
+
+      - name: Vérification des DLL du jeu
+        shell: pwsh
+        run: |
+          $valheim = Join-Path $env:RUNNER_TEMP 'valheim'
+          $managed = Join-Path $valheim 'valheim_server_Data\Managed'
           foreach ($dll in 'assembly_valheim', 'assembly_utils', 'assembly_guiutils', 'Unity.TextMeshPro', 'UnityEngine') {
             if (-not (Test-Path "$managed\$dll.dll")) { throw "DLL absente du serveur dédié : $dll.dll" }
           }
+          $version = ./.github/scripts/Get-ValheimVersion.ps1 "$managed\assembly_valheim.dll"
+          Write-Host "Compilé contre Valheim $version"
+          $cache = if ('${{ steps.cache.outputs.cache-hit }}' -eq 'true') { 'oui' } else { 'non, serveur téléchargé' }
+          @(
+            '### DLL du jeu'
+            ''
+            "- Valheim : $version"
+            "- buildid Steam du serveur dédié : ${{ steps.serveur.outputs.buildid }}"
+            "- Cache : $cache"
+          ) -join "`n" >> $env:GITHUB_STEP_SUMMARY
           "VALHEIM_INSTALL=$valheim" >> $env:GITHUB_ENV
-          $global:LASTEXITCODE = 0
 
       - name: BepInEx (via install.ps1)
         shell: pwsh

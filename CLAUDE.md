@@ -14,7 +14,11 @@ classes for reference only and is gitignored. `Transmute/` is gitignored too: it
 and out of the modpack. `dist/` holds old hand-made zips and is ignored.
 
 CI (`.github/workflows/build.yml`, Windows runner) cannot use the game's proprietary DLLs, so it installs the Valheim
-dedicated server with SteamCMD (anonymous, app 896660) and builds against `valheim_server_Data/Managed`. It
+dedicated server with SteamCMD (anonymous, app 896660) and builds against `valheim_server_Data/Managed`. Only that
+folder is cached (`actions/cache`), keyed on the server's public-branch `buildid` read with `app_info_print`, so the
+2 GB download only happens after a game patch. SteamCMD is run once with `+quit` first: its self-update run fails any
+command passed with it ("Missing configuration"). `.github/scripts/Get-ValheimVersion.ps1` reads the game version
+from the IL of `Version..cctor` (the DLL's own version is 0.0.0.0) for the build summary. It
 installs BepInEx and smoke-tests the package through `install.ps1`, so a change to the script is exercised by CI.
 A `v*` tag publishes a release with `valheim-modpack.zip`, which `install.ps1` downloads. Every project in the
 solution ends up in the package; server installs (`-Server`) only take the mods listed in `$ServerMods`.
