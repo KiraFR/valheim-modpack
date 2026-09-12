@@ -21,7 +21,10 @@ namespace QuickBrew
     ///
     /// Multijoueur : seul le propriétaire réseau du tonneau (un joueur à proximité) écrit le ZDO. Si ce
     /// propriétaire n'a pas le mod, le tonneau fermente à la vitesse vanilla, sans incohérence. Pour un effet
-    /// garanti, installer le mod chez tous les joueurs ; inutile sur le serveur dédié.
+    /// garanti, installer le mod chez tous les joueurs ET sur le serveur dédié : la position de référence d'un
+    /// serveur dédié n'est jamais réglée (seuls Player et Game appellent ZNet.SetReferencePosition) et reste au
+    /// centre du monde. ZDOMan.ReleaseNearbyZDOS lui attribue donc les tonneaux proches du point d'apparition et ne
+    /// les cède jamais à un joueur tant qu'ils restent dans sa zone active : c'est le serveur qui reçoit RPC_AddItem.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin

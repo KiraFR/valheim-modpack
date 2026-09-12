@@ -45,9 +45,10 @@ $Repository = 'KiraFR/valheim-modpack'
 $ArchiveName = 'valheim-modpack.zip'
 $BepInExApi = 'https://thunderstore.io/api/experimental/package/denikson/BepInExPack_Valheim/'
 
-# Mods to install on a dedicated server: StackMax (chests clamp stacks server-side) and PortalMenu
-# (only the server knows every portal in the world). The others are client-only.
-$ServerMods = @('StackMax', 'PortalMenu')
+# Mods to install on a dedicated server: StackMax (chests clamp stacks server-side), PortalMenu (only the server
+# knows every portal in the world) and QuickBrew (the server permanently owns the barrels around the world spawn).
+# The others are client-only.
+$ServerMods = @('StackMax', 'PortalMenu', 'QuickBrew')
 
 function Write-Step([string]$text) {
     Write-Host "==> $text" -ForegroundColor Cyan
