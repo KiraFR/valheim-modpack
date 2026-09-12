@@ -119,16 +119,23 @@ function Install-Mods([string]$cible, [string]$zip, [bool]$serveur) {
     $temp = New-DossierTemp
     try {
         if (-not $zip) {
-            if ($Version -eq 'latest') { $url = "https://github.com/$Depot/releases/latest/download/$NomArchive" }
-            else { $url = "https://github.com/$Depot/releases/download/$Version/$NomArchive" }
-            Write-Etape "Téléchargement du modpack ($Version)"
-            $zip = Join-Path $temp $NomArchive
+            # L'API renvoie la dernière release publiée (hors brouillons et pré-releases) avec son tag et ses fichiers.
+            if ($Version -eq 'latest') { $api = "https://api.github.com/repos/$Depot/releases/latest" }
+            else { $api = "https://api.github.com/repos/$Depot/releases/tags/$Version" }
             try {
-                Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+                $release = Invoke-RestMethod -Uri $api -UseBasicParsing
             }
             catch {
-                throw "Impossible de télécharger $url. Aucune release publiée pour '$Version' ? ($($_.Exception.Message))"
+                $quoi = "la release $Version"
+                if ($Version -eq 'latest') { $quoi = 'aucune release publiée' }
+                throw "Modpack introuvable ($quoi) sur https://github.com/$Depot/releases : $($_.Exception.Message)"
             }
+            $asset = $release.assets | Where-Object { $_.name -eq $NomArchive } | Select-Object -First 1
+            if (-not $asset) { throw "La release $($release.tag_name) ne contient pas $NomArchive." }
+
+            Write-Etape "Téléchargement du modpack $($release.tag_name)"
+            $zip = Join-Path $temp $NomArchive
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip -UseBasicParsing
         }
 
         Expand-Archive -Path $zip -DestinationPath (Join-Path $temp 'x')
