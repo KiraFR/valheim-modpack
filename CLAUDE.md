@@ -18,7 +18,9 @@ dedicated server with SteamCMD (anonymous, app 896660) and builds against `valhe
 installs BepInEx and smoke-tests the package through `install.ps1`, so a change to the script is exercised by CI.
 A `v*` tag publishes a release with `valheim-modpack.zip`, which `install.ps1` downloads. Every project in the
 solution ends up in the package; server installs (`-Server`) only take the mods listed in `$ModsServeur`.
-`install.ps1` must stay compatible with Windows PowerShell 5.1 and be saved as UTF-8 with BOM (accents).
+`install.ps1` must stay compatible with Windows PowerShell 5.1 and contain ASCII only (French without accents, no
+BOM): 5.1 decodes `irm` downloads and BOM-less `-File` scripts as a legacy code page, and a UTF-8 BOM turns into
+garbage before `<#` that breaks parsing of the whole script.
 
 ## Commands
 
@@ -43,8 +45,9 @@ Decompile a game class for reading (output goes to `decompiled/`):
 ilspycmd -t Ship -r "C:/Program Files (x86)/Steam/steamapps/common/Valheim/valheim_Data/Managed" "C:/Program Files (x86)/Steam/steamapps/common/Valheim/valheim_Data/Managed/assembly_valheim.dll" > decompiled/Ship.cs
 ```
 
-Create a new mod: copy `HelloValheim/` to `MyMod/`, rename the `.csproj` and replace `HelloValheim` inside it,
-change the GUID `valheim.mymod` in `Plugin.cs`, then `dotnet sln Valheim.Mods.sln add MyMod/MyMod.csproj`.
+Create a new mod: copy a small existing mod such as `QuickBrew/` to `MyMod/`, rename the `.csproj` and replace
+`QuickBrew` inside it, change the namespace, `PluginGuid` (`valheim.mymod`), `PluginName` and `PluginVersion` in
+`Plugin.cs` and remove its patches, then `dotnet sln Valheim.Mods.sln add MyMod/MyMod.csproj`.
 
 ## Build architecture
 
