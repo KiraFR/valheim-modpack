@@ -7,6 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 BepInEx/Harmony mods for Valheim, one C# project per mod, grouped in `Valheim.Mods.sln`. Comments, config
 descriptions and in-game messages are written in French; keep that convention.
 
+Git commit messages are written in English.
+
 Git repository published at https://github.com/KiraFR/valheim-modpack. `decompiled/` holds ILSpy output of game
 classes for reference only and is gitignored. `Transmute/` is gitignored too: it stays local, out of the solution
 and out of the modpack. `dist/` holds old hand-made zips and is ignored.
