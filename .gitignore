@@ -9,4 +9,4 @@ dist/
 Transmute/
 .claude/settings.local.json
 
-./HelloValheim
+/HelloValheim
