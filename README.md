@@ -1,81 +1,85 @@
 # Valheim mods
 
-Mods BepInEx/Harmony pour Valheim. Solution : `Valheim.Mods.sln` (ouvrir avec Rider).
+English | [Français](README.fr.md)
 
-## Installer (joueurs)
+BepInEx/Harmony mods for Valheim. Solution: `Valheim.Mods.sln` (open with Rider).
 
-Valheim fermé, dans PowerShell :
+In-game texts and configuration keys are in French.
+
+## Install (players)
+
+With Valheim closed, in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install.ps1 | iex
 ```
 
-Le script trouve Valheim dans les bibliothèques Steam, installe BepInExPack Valheim (Thunderstore) s'il manque,
-télécharge `valheim-modpack.zip` depuis la dernière release et copie chaque mod dans `BepInEx/plugins/<Mod>/`.
-Les autres mods et les fichiers `.cfg` ne sont pas touchés. Relancer la même commande met à jour.
+The script finds Valheim in your Steam libraries, installs BepInExPack Valheim (Thunderstore) if it is missing,
+downloads `valheim-modpack.zip` from the latest release and copies each mod into `BepInEx/plugins/<Mod>/`.
+Other mods and `.cfg` files are left untouched. Running the same command again updates the mods.
 
-Avec des paramètres, via `& ([scriptblock]::Create((irm <url>))) <paramètres>` ou `powershell -ExecutionPolicy Bypass -File install.ps1 <paramètres>` :
+With parameters, use `& ([scriptblock]::Create((irm <url>))) <parameters>` or `powershell -ExecutionPolicy Bypass -File install.ps1 <parameters>`:
 
-| Paramètre | Effet |
+| Parameter | Effect |
 |---|---|
-| `-ValheimPath <dossier>` | Dossier du jeu, si la détection Steam échoue. |
-| `-Server` | Cible le serveur dédié et n'installe que les mods utiles côté serveur (`StackMax`, `PortalMenu`). |
-| `-Version v1.2.0` | Installe une release précise au lieu de la dernière. |
-| `-ZipPath <zip>` | Installe depuis une archive locale. |
-| `-BepInExOnly`, `-ForceBepInEx` | N'installe que BepInEx ; réinstalle BepInEx même s'il est présent. |
+| `-ValheimPath <folder>` | Game folder, if Steam detection fails. |
+| `-Server` | Targets the dedicated server and only installs the mods needed server-side (`StackMax`, `PortalMenu`). |
+| `-Version v1.2.0` | Installs a specific release instead of the latest one. |
+| `-ZipPath <zip>` | Installs from a local archive. |
+| `-BepInExOnly`, `-ForceBepInEx` | Installs BepInEx only; reinstalls BepInEx even if it is already present. |
 
-## CI et releases
+## CI and releases
 
-`.github/workflows/build.yml` compile la solution à chaque push et pull request, sur Windows. Les DLL du jeu ne
-sont pas dans le dépôt : la CI télécharge le serveur dédié Valheim par SteamCMD (connexion anonyme), dont
-`valheim_server_Data/Managed` contient le même code de jeu (`Directory.Build.props` bascule dessus quand
-`valheim_Data` est absent), puis installe BepInEx avec `install.ps1`. Elle produit l'artefact
-`valheim-modpack.zip` (`BepInEx/plugins/<Mod>/<Mod>.dll` pour chaque projet de la solution) et vérifie
-l'installation de cette archive dans un dossier vierge.
+`.github/workflows/build.yml` builds the solution on every push and pull request, on Windows. The game DLLs are
+not in the repository: the CI downloads the Valheim dedicated server with SteamCMD (anonymous login), whose
+`valheim_server_Data/Managed` folder contains the same game code (`Directory.Build.props` switches to it when
+`valheim_Data` is missing), then installs BepInEx with `install.ps1`. It produces the `valheim-modpack.zip`
+artifact (`BepInEx/plugins/<Mod>/<Mod>.dll` for each project in the solution) and checks that this archive
+installs correctly into an empty folder.
 
-Publier une release : `git tag v1.0.0 && git push origin v1.0.0`. C'est cette release que `install.ps1` télécharge.
+To publish a release: `git tag v1.0.0 && git push origin v1.0.0`. This is the release `install.ps1` downloads.
 
-## Prérequis (développement)
+## Requirements (development)
 
-- Valheim installé (chemin par défaut Steam). Autre chemin : variable d'environnement `VALHEIM_INSTALL`.
-- BepInExPack Valheim installé dans le dossier du jeu (déjà fait, version 5.4.2333).
-- .NET SDK (n'importe lequel ≥ 6, on compile en `net48` pour le runtime Mono du jeu).
+- Valheim installed (default Steam path). Other path: `VALHEIM_INSTALL` environment variable.
+- BepInExPack Valheim installed in the game folder.
+- .NET SDK (any version ≥ 6; the mods target `net48` for the game's Mono runtime).
 
-## Boucle de dev
+## Dev loop
 
 ```bash
 dotnet build RowTogether/RowTogether.csproj -c Release
 ```
 
-La DLL est copiée automatiquement dans `Valheim/BepInEx/plugins/<NomDuMod>/`.
-Lancer le jeu, puis lire `Valheim/BepInEx/LogOutput.log`.
-Les fichiers de config sont générés dans `Valheim/BepInEx/config/valheim.<mod>.cfg`.
+The DLL is copied automatically to `Valheim/BepInEx/plugins/<ModName>/`.
+Launch the game, then read `Valheim/BepInEx/LogOutput.log`.
+Config files are generated in `Valheim/BepInEx/config/valheim.<mod>.cfg`.
 
-## Lire le code du jeu
+## Reading the game code
 
 ```bash
 ilspycmd -t Ship -r "C:/Program Files (x86)/Steam/steamapps/common/Valheim/valheim_Data/Managed" "C:/Program Files (x86)/Steam/steamapps/common/Valheim/valheim_Data/Managed/assembly_valheim.dll" > decompiled/Ship.cs
 ```
 
-Le dossier `decompiled/` est ignoré par git. Classes utiles : `Player`, `Character`, `Ship`, `ShipControlls`,
+The `decompiled/` folder is ignored by git. Useful classes: `Player`, `Character`, `Ship`, `ShipControlls`,
 `ObjectDB`, `ZNetScene`, `ZDO`, `ZNetView`, `InventoryGui`, `MessageHud`.
 
 ## Mods
 
-| Projet | Description |
+| Project | Description |
 |---|---|
-| `HelloValheim` | Modèle pour créer un nouveau mod (message de bienvenue au spawn). Hors solution et non installé dans le jeu : à copier, pas à compiler. |
-| `StackMax` | Stack max configurable par type d'objet (`[Types]`, multiplicateur ou valeur fixe) et par nom de prefab (`[Objets]`). Génère `BepInEx/config/valheim.stackmax.objets.txt` (tous les types et objets empilables avec leur stack vanilla). Commandes console `stackmax_list` et `stackmax_reload`. Tout le monde doit avoir le mod avec la même config. |
-| `Uncraft` | Onglet « Décrafter » dans le panneau d'artisanat, visible près d'un atelier : rend les matériaux (fabrication + améliorations) des objets dont la recette se fabrique à cet atelier. Ratio, niveau d'atelier requis, exclusions en config. |
-| `ChestCraft` | Puise dans les coffres autour du joueur (rayon configurable, 20 m par défaut) pour la fabrication, la construction au marteau, et l'alimentation des appareils (fondoir, four à charbon, haut fourneau, moulin, rouet, raffinerie d'eitr, fermenteur, feux, balistes), matière première comme carburant. Les grils et fours à pain en sont exclus par défaut (`Cuisson`), leur ingrédient étant imprévisible. Maintenir `Shift` pendant l'interaction remplit l'appareil jusqu'à son maximum (charbon, minerai, bois) ; sans le modificateur, un appui ajoute une unité comme en vanilla. La liste des recettes se rafraîchit d'elle-même quand le contenu d'un coffre proche change, panneau ouvert. En visant un appareil, la touche `R` fait défiler ce qu'il a le droit de prendre dans les coffres : Automatique, chaque ingrédient qu'il sait convertir, puis Rien (l'appareil redevient vanilla). Le choix s'affiche sur le survol, est retenu par type d'appareil et persiste dans la config. `Fabrication`, `Construction` et `Appareils` séparés, `PrioriteCoffres` pour vider les coffres avant le sac, exclusions de coffres par prefab. Commandes console `chestcraft_list` et `chestcraft_reload`. Client uniquement : ni le serveur ni les autres joueurs n'ont besoin du mod. |
-| `ChestStack` | Range tout le sac dans les coffres alentour en un appui (rayon 20 m comme ChestCraft) : chaque objet rejoint ses semblables, rien ne part vers un coffre qui n'en contient pas déjà un exemplaire, et aucune règle n'est à déclarer (pour affecter un objet à un coffre, y déposer une pile à la main une fois). Trois déclencheurs menant au même rangement groupé : `Shift+R` en visant un coffre ou l'écran d'un coffre ouvert, le bouton « Objets similaires », et le maintien de la touche d'interaction. Le coffre visé n'a aucune priorité : un objet file chez le voisin si c'est le voisin qui en détient déjà. `EtendreControlesJeu` rend leur comportement vanilla aux deux contrôles du jeu. Passe par `Container.StackAll()`, donc par le handshake réseau du jeu : propriété du ZDO demandée, coffre fouillé par un autre joueur respecté, coffres privés et cercles protecteurs respectés, effet visuel de dépôt sur chaque coffre servi. Un seul récapitulatif à l'écran au lieu d'un message par coffre. La barre d'action (`ProtegerBarreAction`) et tout ce qui nourrit (`ProtegerNourriture`) restent dans le sac ; l'équipement porté est déjà épargné par le jeu, la viande crue non (matériau sans valeur nutritive). Client uniquement. |
-| `GearSlots` | Emplacements d'équipement dédiés (tête, torse, jambes, épaules, utilitaire, babiole) dans un panneau à droite de l'inventaire. Ajoute une rangée au sac via l'API vanilla `Player.SetInventorySize`, la sort de la grille et en repositionne les cases : les objets restent de vrais objets d'inventaire, sauvegardés normalement. Un objet posé dans son emplacement est équipé, l'en retirer le déséquipe. `RangeesSac` règle la taille du sac lui-même, `DecalageX`/`DecalageY`/`EcartColonnes` la position du panneau. Client uniquement. |
-| `PortalMenu` | Un portail n'est plus lié à un seul autre : interagir avec lui ouvre la liste de tous les portails du monde (nom, biome, distance) et cliquer sur une ligne téléporte. Permet de tenir un réseau entier avec un portail par lieu au lieu d'une paire par liaison. Aucune connexion `ZDOExtraData.ConnectionType.Portal` n'est écrite : le voyage réutilise `Player.TeleportTo` avec les coordonnées choisies, donc la sauvegarde reste vanilla et désinstaller le mod rend des portails normaux. Les garde-fous du jeu sont repris tels quels (clés globales `NoPortals` / `NoBossPortals`, minerai interdit). `Renommer` rouvre le champ de nom vanilla, `Tri` bascule nom/distance, `Échap` ferme. Config : `PortailsSansNom`, `TrierParDistance`, `AutoriserTousObjets`, `DistanceMaximale`, `AfficherBiome`, `DesactiverAppairageVanilla`, taille, `Echelle` et couleur du panneau. Le panneau a son propre `Canvas` en tri forcé pour passer devant le HUD, et les entrées sont coupées dans `PlayerController.TakeInput` (déplacements, regard) autant que dans `Player.TakeInput` (interaction). **À installer aussi sur le serveur dédié** : seul le serveur tient le registre complet des portails (`ZDOMan.GetPortalList`), un client ne connaît que ses secteurs proches. Sans le mod côté serveur, le panneau n'affiche que les portails alentour et l'annonce. |
-| `QuickBrew` | Réduit la durée de fermentation des tonneaux (hydromels, potions) : `Multiplicateur` × durée vanilla (2400 s), 0.025 par défaut soit 1 min. Le mod antidate l'heure de départ stockée dans le ZDO du tonneau au lieu de changer la durée localement, donc tous les joueurs, avec ou sans le mod, voient le tonneau prêt au même moment. Rattrape les tonneaux déjà remplis avant l'installation et les chronos remis à zéro faute de toit. `AfficherTempsRestant` ajoute « Prêt dans … » au survol. Seul le propriétaire réseau du tonneau (un joueur proche) applique le décalage : s'il n'a pas le mod, le tonneau fermente à la vitesse vanilla, sans rien casser. À installer chez tous les joueurs pour un effet garanti, inutile sur le serveur dédié. |
-| `RowTogether` | Les passagers assis rament avec le barreur, sans aucune touche : quand le barreur rame, chaque passager assis (emote « s'asseoir ») ajoute sa poussée, sans notion de côté : x(1 + bonus × rameurs). `LimitToSailSpeed` bride la rame à la vitesse voile de la coque. Client uniquement, mais chez tous les joueurs qui montent à bord : la physique tourne chez le propriétaire réseau du bateau, qui est un joueur à bord, pas forcément le barreur. Inutile sur le serveur dédié. |
+| `HelloValheim` | Template for creating a new mod (welcome message on spawn). Not in the solution and not installed in the game: copy it, don't build it. |
+| `StackMax` | Configurable max stack size per item type (`[Types]`, multiplier or fixed value) and per prefab name (`[Objets]`). Generates `BepInEx/config/valheim.stackmax.objets.txt` (every item type and stackable item with its vanilla stack size). Console commands `stackmax_list` and `stackmax_reload`. Everyone must have the mod with the same config, including the dedicated server. |
+| `Uncraft` | "Décrafter" (uncraft) tab in the crafting panel, visible near a workbench: gives back the materials (crafting + upgrades) of items whose recipe is made at that station. Ratio, required station level and exclusions in the config. |
+| `ChestCraft` | Pulls from chests around the player (configurable radius, 20 m by default) for crafting, hammer building, and feeding stations (smelter, charcoal kiln, blast furnace, windmill, spinning wheel, eitr refinery, fermenter, fires, ballistas), both raw materials and fuel. Cooking stations and ovens are excluded by default (`Cuisson`), since their ingredient is unpredictable. Holding `Shift` while interacting fills the station to its maximum (coal, ore, wood); without the modifier, one press adds one unit as in vanilla. The recipe list refreshes by itself when the contents of a nearby chest change while the panel is open. While aiming at a station, the `R` key cycles through what it may take from chests: Automatic, each ingredient it can convert, then Nothing (the station goes back to vanilla). The choice is shown on hover, remembered per station type and saved in the config. Separate `Fabrication`, `Construction` and `Appareils` switches, `PrioriteCoffres` to empty chests before the inventory, chest exclusions by prefab. Console commands `chestcraft_list` and `chestcraft_reload`. Client only: neither the server nor other players need the mod. |
+| `ChestStack` | Stores the whole inventory into nearby chests in one press (20 m radius like ChestCraft): each item joins its kind, nothing goes to a chest that doesn't already hold one, and there are no rules to declare (to assign an item to a chest, put a stack in it by hand once). Three triggers lead to the same grouped storing: `Shift+R` while aiming at a chest or with a chest open, the "Place stacks" button, and holding the interact key. The targeted chest has no priority: an item goes to the neighbour if the neighbour is the one already holding it. `EtendreControlesJeu` restores vanilla behaviour for the two game controls. Goes through `Container.StackAll()`, so through the game's network handshake: ZDO ownership requested, chests being browsed by another player respected, private chests and wards respected, deposit visual effect on each chest served. A single summary on screen instead of one message per chest. The hotbar (`ProtegerBarreAction`) and anything edible (`ProtegerNourriture`) stay in the inventory; equipped gear is already spared by the game, raw meat is not (a material with no food value). Client only. |
+| `GearSlots` | Dedicated equipment slots (head, chest, legs, shoulders, utility, trinket) in a panel to the right of the inventory. Adds a row to the inventory through the vanilla `Player.SetInventorySize` API, takes it out of the grid and repositions its slots: items remain real inventory items, saved normally. An item placed in its slot is equipped, removing it unequips it. `RangeesSac` sets the size of the inventory itself, `DecalageX`/`DecalageY`/`EcartColonnes` the position of the panel. Client only. |
+| `PortalMenu` | A portal is no longer linked to a single other one: interacting with it opens the list of every portal in the world (name, biome, distance) and clicking a row teleports you. Lets you run a whole network with one portal per location instead of one pair per link. No `ZDOExtraData.ConnectionType.Portal` connection is written: travel reuses `Player.TeleportTo` with the chosen coordinates, so the save stays vanilla and uninstalling the mod gives back normal portals. The game's safeguards are kept as they are (`NoPortals` / `NoBossPortals` global keys, no ore through portals). `Renommer` reopens the vanilla name field, `Tri` toggles name/distance sorting, `Esc` closes. Config: `PortailsSansNom`, `TrierParDistance`, `AutoriserTousObjets`, `DistanceMaximale`, `AfficherBiome`, `DesactiverAppairageVanilla`, panel size, `Echelle` and colour. The panel has its own `Canvas` with forced sorting to sit above the HUD, and input is blocked in `PlayerController.TakeInput` (movement, camera) as well as in `Player.TakeInput` (interaction). **Also install it on the dedicated server**: only the server holds the full portal registry (`ZDOMan.GetPortalList`), a client only knows its nearby sectors. Without the mod on the server, the panel only shows nearby portals and says so. |
+| `QuickBrew` | Shortens the fermentation time of barrels (meads, potions): `Multiplicateur` × vanilla duration (2400 s), 0.025 by default, i.e. 1 min. The mod backdates the start time stored in the barrel's ZDO instead of changing the duration locally, so every player, with or without the mod, sees the barrel ready at the same moment. Catches up barrels filled before the install and timers reset for lack of a roof. `AfficherTempsRestant` adds "Prêt dans …" (ready in …) on hover. Only the barrel's network owner (a nearby player) applies the offset: if that player doesn't have the mod, the barrel ferments at vanilla speed, without breaking anything. Install it for every player to guarantee the effect; useless on the dedicated server. |
+| `RowTogether` | Seated passengers row with the helmsman, without any key: when the helmsman rows, each seated passenger ("sit" emote) adds their thrust, regardless of side: x(1 + bonus × rowers). `LimitToSailSpeed` caps rowing at the hull's sailing speed. Client only, but for every player who boards: physics runs on the ship's network owner, who is a player on board, not necessarily the helmsman. Useless on the dedicated server. |
 
-## Créer un nouveau mod
+## Creating a new mod
 
-1. Copier `HelloValheim/` vers `MonMod/`, renommer le `.csproj` et remplacer `HelloValheim` dedans.
-2. Changer le GUID `valheim.monmod` dans `Plugin.cs`.
-3. `dotnet sln Valheim.Mods.sln add MonMod/MonMod.csproj`
+1. Copy `HelloValheim/` to `MyMod/`, rename the `.csproj` and replace `HelloValheim` inside it.
+2. Change the GUID to `valheim.mymod` in `Plugin.cs`.
+3. `dotnet sln Valheim.Mods.sln add MyMod/MyMod.csproj`
