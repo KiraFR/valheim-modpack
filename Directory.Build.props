@@ -1,0 +1,21 @@
+<Project>
+  <PropertyGroup>
+    <!-- Chemin d'installation de Valheim (surchargeable via variable d'environnement VALHEIM_INSTALL) -->
+    <ValheimInstall Condition="'$(VALHEIM_INSTALL)' != ''">$(VALHEIM_INSTALL)</ValheimInstall>
+    <ValheimInstall Condition="'$(ValheimInstall)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Valheim</ValheimInstall>
+    <!-- Le jeu range ses DLL dans valheim_Data, le serveur dédié (utilisé par la CI) dans valheim_server_Data -->
+    <ValheimManaged Condition="!Exists('$(ValheimInstall)\valheim_Data\Managed') And Exists('$(ValheimInstall)\valheim_server_Data\Managed')">$(ValheimInstall)\valheim_server_Data\Managed</ValheimManaged>
+    <ValheimManaged Condition="'$(ValheimManaged)' == ''">$(ValheimInstall)\valheim_Data\Managed</ValheimManaged>
+    <BepInExCore>$(ValheimInstall)\BepInEx\core</BepInExCore>
+    <BepInExPlugins>$(ValheimInstall)\BepInEx\plugins</BepInExPlugins>
+
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DebugType>embedded</DebugType>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+</Project>

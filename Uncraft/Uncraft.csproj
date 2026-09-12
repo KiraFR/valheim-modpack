@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Uncraft</AssemblyName>
+    <RootNamespace>Uncraft</RootNamespace>
+    <Version>1.0.0</Version>
+    <Description>Décrafter les objets fabricables dans leur atelier pour récupérer les matériaux.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Rend publics les membres privés des assemblies du jeu (Publicize="true") -->
+    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BepInEx + Harmony, pris directement dans l'installation du jeu -->
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCore)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Assemblies du jeu -->
+    <Reference Include="assembly_valheim" Publicize="true">
+      <HintPath>$(ValheimManaged)\assembly_valheim.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_utils" Publicize="true">
+      <HintPath>$(ValheimManaged)\assembly_utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_guiutils" Publicize="true">
+      <HintPath>$(ValheimManaged)\assembly_guiutils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Unity -->
+    <Reference Include="$(ValheimManaged)\UnityEngine.dll;$(ValheimManaged)\UnityEngine.*.dll">
+      <Private>false</Private>
+    </Reference>
+    <!-- TextMeshPro : textes de l'interface (onglets, bouton, prérequis) -->
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(ValheimManaged)\Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Après compilation : copie la DLL dans BepInEx/plugins/Uncraft/ -->
+  <Target Name="DeployToPlugins" AfterTargets="Build" Condition="Exists('$(BepInExPlugins)')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPlugins)\$(AssemblyName)" />
+    <Message Importance="high" Text="→ Déployé dans $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
+  </Target>
+
+</Project>

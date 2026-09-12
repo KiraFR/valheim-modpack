@@ -1,0 +1,202 @@
+﻿<#
+.SYNOPSIS
+    Installe le modpack Valheim (BepInEx + mods) dans le dossier du jeu ou du serveur dédié.
+
+.DESCRIPTION
+    - Trouve Valheim tout seul via Steam (registre + toutes les bibliothèques de libraryfolders.vdf).
+    - Installe BepInExPack Valheim depuis Thunderstore s'il est absent.
+    - Télécharge valheim-modpack.zip depuis la dernière release GitHub et copie chaque mod dans
+      BepInEx/plugins/<Mod>/, en remplaçant l'ancienne version. Les autres mods et les .cfg ne sont pas touchés.
+    - Avec -Server, cible le serveur dédié et n'installe que les mods utiles côté serveur.
+
+    Valheim doit être fermé pendant l'installation.
+
+.EXAMPLE
+    irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install.ps1 | iex
+
+.EXAMPLE
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install.ps1))) -Server
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File install.ps1 -ValheimPath "D:\Jeux\Valheim"
+#>
+[CmdletBinding()]
+param(
+    # Dossier de Valheim. Par défaut : détecté via Steam.
+    [string]$ValheimPath,
+    # Cible le serveur dédié (Valheim dedicated server) au lieu du jeu.
+    [switch]$Server,
+    # Release à installer, par exemple v1.2.0. Par défaut : la dernière.
+    [string]$Version = 'latest',
+    # Archive locale du modpack à utiliser au lieu de la télécharger.
+    [string]$ZipPath,
+    # N'installe que BepInEx, sans les mods.
+    [switch]$BepInExOnly,
+    # Réinstalle BepInEx même s'il est déjà présent.
+    [switch]$ForceBepInEx
+)
+
+$ErrorActionPreference = 'Stop'
+# La barre de progression rend Invoke-WebRequest extrêmement lent sous Windows PowerShell 5.1.
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+$Depot = 'KiraFR/valheim-modpack'
+$NomArchive = 'valheim-modpack.zip'
+$BepInExApi = 'https://thunderstore.io/api/experimental/package/denikson/BepInExPack_Valheim/'
+
+# Mods à installer sur un serveur dédié : StackMax (les coffres rabotent les piles côté serveur) et PortalMenu
+# (seul le serveur connaît tous les portails du monde). Les autres sont purement clients.
+$ModsServeur = @('StackMax', 'PortalMenu')
+
+function Write-Etape([string]$texte) {
+    Write-Host "==> $texte" -ForegroundColor Cyan
+}
+
+function New-DossierTemp {
+    $chemin = Join-Path ([IO.Path]::GetTempPath()) ('valheim-modpack-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $chemin | Out-Null
+    return $chemin
+}
+
+function Get-BibliothequesSteam {
+    $racines = @()
+    foreach ($cle in 'HKCU:\Software\Valve\Steam', 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam', 'HKLM:\SOFTWARE\Valve\Steam') {
+        $proprietes = Get-ItemProperty -Path $cle -ErrorAction SilentlyContinue
+        if ($proprietes.SteamPath) { $racines += $proprietes.SteamPath }
+        if ($proprietes.InstallPath) { $racines += $proprietes.InstallPath }
+    }
+    $racines += Join-Path ${env:ProgramFiles(x86)} 'Steam'
+
+    $bibliotheques = @()
+    foreach ($racine in $racines) {
+        $racine = $racine -replace '/', '\'
+        if (-not (Test-Path $racine)) { continue }
+        $bibliotheques += $racine
+        # Chaque disque où Steam installe des jeux est listé dans libraryfolders.vdf ("path" "D:\\SteamLibrary").
+        $vdf = Join-Path $racine 'steamapps\libraryfolders.vdf'
+        if (Test-Path $vdf) {
+            foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) {
+                $bibliotheques += $m.Groups[1].Value -replace '\\\\', '\'
+            }
+        }
+    }
+    return $bibliotheques | ForEach-Object { $_.TrimEnd('\') } | Sort-Object -Unique
+}
+
+function Find-Valheim([bool]$serveur) {
+    if ($serveur) { $dossier = 'Valheim dedicated server'; $exe = 'valheim_server.exe' }
+    else { $dossier = 'Valheim'; $exe = 'valheim.exe' }
+
+    foreach ($bibliotheque in Get-BibliothequesSteam) {
+        $chemin = Join-Path $bibliotheque "steamapps\common\$dossier"
+        if (Test-Path (Join-Path $chemin $exe)) { return $chemin }
+    }
+    return $null
+}
+
+function Install-BepInEx([string]$cible) {
+    Write-Etape 'Téléchargement de BepInExPack Valheim (Thunderstore)'
+    $paquet = Invoke-RestMethod -Uri $BepInExApi -UseBasicParsing
+    $temp = New-DossierTemp
+    try {
+        $zip = Join-Path $temp 'BepInExPack_Valheim.zip'
+        Invoke-WebRequest -Uri $paquet.latest.download_url -OutFile $zip -UseBasicParsing
+        Expand-Archive -Path $zip -DestinationPath (Join-Path $temp 'x')
+
+        # Le contenu à copier dans le dossier du jeu est celui qui contient winhttp.dll (le chargeur Doorstop).
+        $winhttp = Get-ChildItem (Join-Path $temp 'x') -Recurse -Filter 'winhttp.dll' | Select-Object -First 1
+        if (-not $winhttp) { throw "Archive BepInExPack inattendue : winhttp.dll introuvable." }
+        Copy-Item -Path (Join-Path $winhttp.DirectoryName '*') -Destination $cible -Recurse -Force
+        Write-Host "    BepInExPack Valheim $($paquet.latest.version_number) installé"
+    }
+    finally {
+        Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-Mods([string]$cible, [string]$zip, [bool]$serveur) {
+    $temp = New-DossierTemp
+    try {
+        if (-not $zip) {
+            if ($Version -eq 'latest') { $url = "https://github.com/$Depot/releases/latest/download/$NomArchive" }
+            else { $url = "https://github.com/$Depot/releases/download/$Version/$NomArchive" }
+            Write-Etape "Téléchargement du modpack ($Version)"
+            $zip = Join-Path $temp $NomArchive
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+            }
+            catch {
+                throw "Impossible de télécharger $url. Aucune release publiée pour '$Version' ? ($($_.Exception.Message))"
+            }
+        }
+
+        Expand-Archive -Path $zip -DestinationPath (Join-Path $temp 'x')
+        $sources = Join-Path $temp 'x\BepInEx\plugins'
+        if (-not (Test-Path $sources)) { throw "Archive du modpack inattendue : BepInEx\plugins absent." }
+
+        $plugins = Join-Path $cible 'BepInEx\plugins'
+        New-Item -ItemType Directory -Force -Path $plugins | Out-Null
+
+        Write-Etape "Installation des mods dans $plugins"
+        $installes = 0
+        foreach ($mod in Get-ChildItem $sources -Directory) {
+            if ($serveur -and $ModsServeur -notcontains $mod.Name) { continue }
+
+            # Le dossier du mod est remplacé en entier pour ne pas laisser de fichier d'une ancienne version.
+            $destination = Join-Path $plugins $mod.Name
+            if (Test-Path $destination) { Remove-Item $destination -Recurse -Force }
+            Copy-Item -Path $mod.FullName -Destination $destination -Recurse
+
+            $dll = Join-Path $destination "$($mod.Name).dll"
+            $version = ''
+            if (Test-Path $dll) { $version = (Get-Item $dll).VersionInfo.FileVersion -replace '\.0$', '' }
+            Write-Host ("    {0,-12} {1}" -f $mod.Name, $version)
+            $installes++
+        }
+        if ($installes -eq 0) { throw "Aucun mod trouvé dans l'archive." }
+    }
+    finally {
+        Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ----- Programme -----
+
+if ($ValheimPath) {
+    if (-not (Test-Path $ValheimPath -PathType Container)) { throw "Dossier introuvable : $ValheimPath" }
+    $cible = (Resolve-Path $ValheimPath).Path
+}
+else {
+    $cible = Find-Valheim $Server.IsPresent
+    if (-not $cible) {
+        $quoi = 'Valheim'
+        if ($Server) { $quoi = 'Valheim dedicated server' }
+        throw "$quoi introuvable dans les bibliothèques Steam. Indiquez le dossier avec -ValheimPath."
+    }
+}
+Write-Etape "Dossier cible : $cible"
+
+# Seul un Valheim lancé depuis le dossier cible gêne : winhttp.dll y est verrouillé, et les mods remplacés ne
+# seraient de toute façon chargés qu'au prochain lancement. Un chemin illisible compte comme bloquant.
+$enCours = Get-Process -Name 'valheim', 'valheim_server' -ErrorAction SilentlyContinue | Where-Object {
+    -not $_.Path -or $_.Path.StartsWith($cible.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+if ($enCours) {
+    throw "Fermez $($enCours[0].ProcessName) avant d'installer : il tourne depuis $cible."
+}
+
+if ($ZipPath) { $ZipPath = (Resolve-Path $ZipPath).Path }
+
+if ($ForceBepInEx -or -not (Test-Path (Join-Path $cible 'BepInEx\core\BepInEx.dll'))) {
+    Install-BepInEx $cible
+}
+else {
+    Write-Etape 'BepInEx déjà installé'
+}
+
+if (-not $BepInExOnly) {
+    Install-Mods $cible $ZipPath $Server.IsPresent
+}
+
+Write-Etape 'Terminé. Lancez Valheim normalement depuis Steam.'

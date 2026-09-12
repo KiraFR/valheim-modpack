@@ -1,0 +1,97 @@
+# Compile tous les mods de Valheim.Mods.sln et produit valheim-modpack.zip.
+#
+# Les DLL du jeu ne sont pas dans le dépôt (propriétaires) : on télécharge le serveur dédié Valheim par SteamCMD
+# en connexion anonyme, qui contient le même code de jeu. BepInEx est installé par install.ps1, ce qui teste
+# le script au passage. Un tag v* publie une release avec l'archive, que install.ps1 télécharge.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Serveur dédié Valheim (DLL du jeu)
+        shell: pwsh
+        run: |
+          $steamcmd = Join-Path $env:RUNNER_TEMP 'steamcmd'
+          $valheim = Join-Path $env:RUNNER_TEMP 'valheim'
+          New-Item -ItemType Directory -Force $steamcmd | Out-Null
+          Invoke-WebRequest https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip -OutFile "$steamcmd\steamcmd.zip"
+          Expand-Archive "$steamcmd\steamcmd.zip" $steamcmd -Force
+
+          # SteamCMD se met à jour au premier lancement et sort alors souvent en erreur (code 7) sans rien
+          # installer : on juge sur la présence des fichiers, avec quelques essais.
+          $managed = Join-Path $valheim 'valheim_server_Data\Managed'
+          for ($essai = 1; $essai -le 3 -and -not (Test-Path "$managed\assembly_valheim.dll"); $essai++) {
+            Write-Host "SteamCMD, essai $essai"
+            & "$steamcmd\steamcmd.exe" +force_install_dir $valheim +login anonymous +app_update 896660 validate +quit
+          }
+          foreach ($dll in 'assembly_valheim', 'assembly_utils', 'assembly_guiutils', 'Unity.TextMeshPro', 'UnityEngine') {
+            if (-not (Test-Path "$managed\$dll.dll")) { throw "DLL absente du serveur dédié : $dll.dll" }
+          }
+          "VALHEIM_INSTALL=$valheim" >> $env:GITHUB_ENV
+          $global:LASTEXITCODE = 0
+
+      - name: BepInEx (via install.ps1)
+        shell: pwsh
+        run: ./install.ps1 -ValheimPath $env:VALHEIM_INSTALL -BepInExOnly
+
+      - name: Compilation
+        run: dotnet build Valheim.Mods.sln -c Release
+
+      - name: Archive valheim-modpack.zip
+        shell: pwsh
+        run: |
+          $paquet = Join-Path $env:RUNNER_TEMP 'paquet'
+          $plugins = Join-Path $paquet 'BepInEx\plugins'
+          $projets = dotnet sln Valheim.Mods.sln list | Where-Object { $_ -like '*.csproj' }
+          foreach ($projet in $projets) {
+            $nom = ([xml](Get-Content $projet)).Project.PropertyGroup.AssemblyName | Where-Object { $_ } | Select-Object -First 1
+            $dll = Join-Path (Split-Path $projet) "bin\Release\$nom.dll"
+            if (-not (Test-Path $dll)) { throw "DLL introuvable : $dll" }
+            New-Item -ItemType Directory -Force (Join-Path $plugins $nom) | Out-Null
+            Copy-Item $dll (Join-Path $plugins $nom)
+            Write-Host "$nom $((Get-Item $dll).VersionInfo.FileVersion)"
+          }
+          Compress-Archive -Path "$paquet\*" -DestinationPath valheim-modpack.zip -Force
+
+      - name: Test d'installation dans un dossier vierge
+        shell: pwsh
+        run: |
+          $test = Join-Path $env:RUNNER_TEMP 'install-test'
+          New-Item -ItemType Directory -Force $test | Out-Null
+          ./install.ps1 -ValheimPath $test -ZipPath valheim-modpack.zip
+          $attendus = @('BepInEx\core\BepInEx.dll', 'winhttp.dll') +
+            (Get-ChildItem "$env:RUNNER_TEMP\paquet\BepInEx\plugins" -Directory | ForEach-Object { "BepInEx\plugins\$($_.Name)\$($_.Name).dll" })
+          foreach ($f in $attendus) {
+            if (-not (Test-Path (Join-Path $test $f))) { throw "Absent après installation : $f" }
+          }
+          Write-Host "Installation vérifiée : $($attendus.Count) fichiers"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: valheim-modpack
+          path: valheim-modpack.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME valheim-modpack.zip install.ps1 --title $env:GITHUB_REF_NAME --generate-notes
