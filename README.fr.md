@@ -66,7 +66,6 @@ Le dossier `decompiled/` est ignoré par git. Classes utiles : `Player`, `Charac
 
 | Projet | Description |
 |---|---|
-| `HelloValheim` | Modèle pour créer un nouveau mod (message de bienvenue au spawn). Hors solution et non installé dans le jeu : à copier, pas à compiler. |
 | `StackMax` | Stack max configurable par type d'objet (`[Types]`, multiplicateur ou valeur fixe) et par nom de prefab (`[Objets]`). Génère `BepInEx/config/valheim.stackmax.objets.txt` (tous les types et objets empilables avec leur stack vanilla). Commandes console `stackmax_list` et `stackmax_reload`. Tout le monde doit avoir le mod avec la même config. |
 | `Uncraft` | Onglet « Décrafter » dans le panneau d'artisanat, visible près d'un atelier : rend les matériaux (fabrication + améliorations) des objets dont la recette se fabrique à cet atelier. Ratio, niveau d'atelier requis, exclusions en config. |
 | `ChestCraft` | Puise dans les coffres autour du joueur (rayon configurable, 20 m par défaut) pour la fabrication, la construction au marteau, et l'alimentation des appareils (fondoir, four à charbon, haut fourneau, moulin, rouet, raffinerie d'eitr, fermenteur, feux, balistes), matière première comme carburant. Les grils et fours à pain en sont exclus par défaut (`Cuisson`), leur ingrédient étant imprévisible. Maintenir `Shift` pendant l'interaction remplit l'appareil jusqu'à son maximum (charbon, minerai, bois) ; sans le modificateur, un appui ajoute une unité comme en vanilla. La liste des recettes se rafraîchit d'elle-même quand le contenu d'un coffre proche change, panneau ouvert. En visant un appareil, la touche `R` fait défiler ce qu'il a le droit de prendre dans les coffres : Automatique, chaque ingrédient qu'il sait convertir, puis Rien (l'appareil redevient vanilla). Le choix s'affiche sur le survol, est retenu par type d'appareil et persiste dans la config. `Fabrication`, `Construction` et `Appareils` séparés, `PrioriteCoffres` pour vider les coffres avant le sac, exclusions de coffres par prefab. Commandes console `chestcraft_list` et `chestcraft_reload`. Client uniquement : ni le serveur ni les autres joueurs n'ont besoin du mod. |
@@ -78,6 +77,6 @@ Le dossier `decompiled/` est ignoré par git. Classes utiles : `Player`, `Charac
 
 ## Créer un nouveau mod
 
-1. Copier `HelloValheim/` vers `MonMod/`, renommer le `.csproj` et remplacer `HelloValheim` dedans.
-2. Changer le GUID `valheim.monmod` dans `Plugin.cs`.
+1. Copier un petit mod existant comme `QuickBrew/` vers `MonMod/`, renommer le `.csproj` et remplacer `QuickBrew` dedans.
+2. Dans `Plugin.cs`, changer le namespace, `PluginGuid` (`valheim.monmod`), `PluginName` et `PluginVersion`, et retirer les patches.
 3. `dotnet sln Valheim.Mods.sln add MonMod/MonMod.csproj`

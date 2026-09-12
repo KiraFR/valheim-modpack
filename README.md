@@ -68,7 +68,6 @@ The `decompiled/` folder is ignored by git. Useful classes: `Player`, `Character
 
 | Project | Description |
 |---|---|
-| `HelloValheim` | Template for creating a new mod (welcome message on spawn). Not in the solution and not installed in the game: copy it, don't build it. |
 | `StackMax` | Configurable max stack size per item type (`[Types]`, multiplier or fixed value) and per prefab name (`[Objets]`). Generates `BepInEx/config/valheim.stackmax.objets.txt` (every item type and stackable item with its vanilla stack size). Console commands `stackmax_list` and `stackmax_reload`. Everyone must have the mod with the same config, including the dedicated server. |
 | `Uncraft` | "Décrafter" (uncraft) tab in the crafting panel, visible near a workbench: gives back the materials (crafting + upgrades) of items whose recipe is made at that station. Ratio, required station level and exclusions in the config. |
 | `ChestCraft` | Pulls from chests around the player (configurable radius, 20 m by default) for crafting, hammer building, and feeding stations (smelter, charcoal kiln, blast furnace, windmill, spinning wheel, eitr refinery, fermenter, fires, ballistas), both raw materials and fuel. Cooking stations and ovens are excluded by default (`Cuisson`), since their ingredient is unpredictable. Holding `Shift` while interacting fills the station to its maximum (coal, ore, wood); without the modifier, one press adds one unit as in vanilla. The recipe list refreshes by itself when the contents of a nearby chest change while the panel is open. While aiming at a station, the `R` key cycles through what it may take from chests: Automatic, each ingredient it can convert, then Nothing (the station goes back to vanilla). The choice is shown on hover, remembered per station type and saved in the config. Separate `Fabrication`, `Construction` and `Appareils` switches, `PrioriteCoffres` to empty chests before the inventory, chest exclusions by prefab. Console commands `chestcraft_list` and `chestcraft_reload`. Client only: neither the server nor other players need the mod. |
@@ -80,6 +79,6 @@ The `decompiled/` folder is ignored by git. Useful classes: `Player`, `Character
 
 ## Creating a new mod
 
-1. Copy `HelloValheim/` to `MyMod/`, rename the `.csproj` and replace `HelloValheim` inside it.
-2. Change the GUID to `valheim.mymod` in `Plugin.cs`.
+1. Copy a small existing mod such as `QuickBrew/` to `MyMod/`, rename the `.csproj` and replace `QuickBrew` inside it.
+2. In `Plugin.cs`, change the namespace, `PluginGuid` (`valheim.mymod`), `PluginName` and `PluginVersion`, and remove the patches.
 3. `dotnet sln Valheim.Mods.sln add MyMod/MyMod.csproj`
