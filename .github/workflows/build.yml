@@ -96,9 +96,9 @@ jobs:
           ) -join "`n" >> $env:GITHUB_STEP_SUMMARY
           "VALHEIM_INSTALL=$valheim" >> $env:GITHUB_ENV
 
-      - name: BepInEx (through install.ps1)
+      - name: BepInEx (through install-server.ps1)
         shell: pwsh
-        run: ./install.ps1 -ValheimPath $env:VALHEIM_INSTALL -BepInExOnly
+        run: ./install-server.ps1 -ServerPath $env:VALHEIM_INSTALL -BepInExOnly
 
       - name: Build
         run: dotnet build Valheim.Mods.sln -c Release
@@ -119,18 +119,36 @@ jobs:
           }
           Compress-Archive -Path "$package\*" -DestinationPath valheim-modpack.zip -Force
 
-      - name: Test install into an empty folder
+      - name: Test installs into empty folders
         shell: pwsh
         run: |
-          $test = Join-Path $env:RUNNER_TEMP 'install-test'
-          New-Item -ItemType Directory -Force $test | Out-Null
-          ./install.ps1 -ValheimPath $test -ZipPath valheim-modpack.zip
-          $expected = @('BepInEx\core\BepInEx.dll', 'winhttp.dll') +
-            (Get-ChildItem "$env:RUNNER_TEMP\package\BepInEx\plugins" -Directory | ForEach-Object { "BepInEx\plugins\$($_.Name)\$($_.Name).dll" })
-          foreach ($file in $expected) {
-            if (-not (Test-Path (Join-Path $test $file))) { throw "Missing after install: $file" }
+          function Test-Install([string]$script, [string]$pathParameter, [string[]]$mods) {
+            $folder = Join-Path $env:RUNNER_TEMP "test-$([IO.Path]::GetFileNameWithoutExtension($script))"
+            New-Item -ItemType Directory -Force $folder | Out-Null
+            $arguments = @{ $pathParameter = $folder; ZipPath = 'valheim-modpack.zip' }
+            & "./$script" @arguments
+            foreach ($file in @('BepInEx\core\BepInEx.dll', 'winhttp.dll')) {
+              if (-not (Test-Path (Join-Path $folder $file))) { throw "${script}: missing after install: $file" }
+            }
+            $installed = @(Get-ChildItem (Join-Path $folder 'BepInEx\plugins') -Directory | ForEach-Object Name | Sort-Object)
+            $wanted = @($mods | Sort-Object)
+            if (($installed -join ',') -ne ($wanted -join ',')) {
+              throw "${script}: installed [$($installed -join ', ')], expected [$($wanted -join ', ')]"
+            }
+            foreach ($mod in $mods) {
+              if (-not (Test-Path (Join-Path $folder "BepInEx\plugins\$mod\$mod.dll"))) { throw "${script}: missing $mod.dll" }
+            }
+            Write-Host "${script} verified: $($mods -join ', ')"
           }
-          Write-Host "Install verified: $($expected.Count) files"
+
+          $allMods = @(Get-ChildItem "$env:RUNNER_TEMP\package\BepInEx\plugins" -Directory | ForEach-Object Name)
+          # The server list is read from the script itself, so the test follows any change to $ServerMods.
+          $serverList = [regex]::Match((Get-Content install-server.ps1 -Raw), '\$ServerMods = @\(([^)]*)\)').Groups[1].Value
+          $serverMods = @([regex]::Matches($serverList, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+          if ($serverMods.Count -eq 0) { throw 'Could not read $ServerMods from install-server.ps1' }
+
+          Test-Install 'install.ps1' 'ValheimPath' $allMods
+          Test-Install 'install-server.ps1' 'ServerPath' $serverMods
 
       - uses: actions/upload-artifact@v7
         with:
@@ -142,4 +160,4 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME valheim-modpack.zip install.ps1 --title $env:GITHUB_REF_NAME --generate-notes
+        run: gh release create $env:GITHUB_REF_NAME valheim-modpack.zip install.ps1 install-server.ps1 --title $env:GITHUB_REF_NAME --generate-notes

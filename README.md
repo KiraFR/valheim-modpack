@@ -18,28 +18,44 @@ The script finds Valheim in your Steam libraries, installs BepInExPack Valheim (
 downloads `valheim-modpack.zip` from the latest release and copies each mod into `BepInEx/plugins/<Mod>/`.
 Other mods and `.cfg` files are left untouched. Running the same command again updates the mods.
 
-With parameters, use `& ([scriptblock]::Create((irm <url>))) <parameters>` or `powershell -ExecutionPolicy Bypass -File install.ps1 <parameters>`:
+## Install (dedicated server)
+
+With the server stopped, on the Windows machine hosting it:
+
+```powershell
+irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install-server.ps1 | iex
+```
+
+Same steps, but in the `Valheim dedicated server` folder of the Steam libraries, and only with the mods needed
+server-side (`StackMax`, `PortalMenu`, `QuickBrew`). A server installed elsewhere, for example with SteamCMD, needs
+`-ServerPath`. Linux servers and hosting providers without PowerShell access need a manual copy of the archive.
+
+## Script parameters
+
+Use `& ([scriptblock]::Create((irm <url>))) <parameters>` or `powershell -ExecutionPolicy Bypass -File <script> <parameters>`:
 
 | Parameter | Effect |
 |---|---|
-| `-ValheimPath <folder>` | Game folder, if Steam detection fails. |
-| `-Server` | Targets the dedicated server and only installs the mods needed server-side (`StackMax`, `PortalMenu`, `QuickBrew`). |
+| `-ValheimPath <folder>` (`install.ps1`) | Game folder, if Steam detection fails. |
+| `-ServerPath <folder>` (`install-server.ps1`) | Dedicated server folder (holding `valheim_server.exe`), if Steam detection fails. |
 | `-Version v1.2.0` | Installs a specific release instead of the latest one. |
 | `-ZipPath <zip>` | Installs from a local archive. |
 | `-BepInExOnly`, `-ForceBepInEx` | Installs BepInEx only; reinstalls BepInEx even if it is already present. |
+
+Each script refuses the other's folder (game folder for the server script, server folder for the game script).
 
 ## CI and releases
 
 `.github/workflows/build.yml` builds the solution on every push and pull request, on Windows. The game DLLs are
 not in the repository: the CI downloads the Valheim dedicated server with SteamCMD (anonymous login), whose
 `valheim_server_Data/Managed` folder contains the same game code (`Directory.Build.props` switches to it when
-`valheim_Data` is missing), then installs BepInEx with `install.ps1`. That `Managed` folder is cached under the
+`valheim_Data` is missing), then installs BepInEx with `install-server.ps1`. That `Managed` folder is cached under the
 server's Steam build id, so the 2 GB server is only downloaded again after a Valheim patch; the build summary shows
 the game version the mods were compiled against. It produces the `valheim-modpack.zip`
-artifact (`BepInEx/plugins/<Mod>/<Mod>.dll` for each project in the solution) and checks that this archive
-installs correctly into an empty folder.
+artifact (`BepInEx/plugins/<Mod>/<Mod>.dll` for each project in the solution) and checks that both scripts install
+this archive correctly into empty folders (every mod for the game, exactly the server mods for the server).
 
-To publish a release: `git tag v1.0.0 && git push origin v1.0.0`. This is the release `install.ps1` downloads.
+To publish a release: `git tag v1.0.0 && git push origin v1.0.0`. This is the release both scripts download.
 
 ## Requirements (development)
 

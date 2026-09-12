@@ -1,25 +1,26 @@
 <#
 .SYNOPSIS
-    Installs the Valheim modpack (BepInEx + mods) into the Valheim game folder.
+    Installs the Valheim modpack (BepInEx + server-side mods) into a Valheim dedicated server folder.
 
 .DESCRIPTION
-    - Finds Valheim through Steam (registry + every library listed in libraryfolders.vdf).
+    - Finds "Valheim dedicated server" through Steam (registry + every library listed in libraryfolders.vdf).
+      A server installed elsewhere, for example with SteamCMD, needs -ServerPath.
     - Installs BepInExPack Valheim from Thunderstore if it is missing.
-    - Downloads valheim-modpack.zip from the latest GitHub release and copies every mod into
-      BepInEx/plugins/<Mod>/, replacing the previous version. Other mods and .cfg files are left untouched.
+    - Downloads valheim-modpack.zip from the latest GitHub release and copies only the mods needed server-side
+      into BepInEx/plugins/<Mod>/, replacing the previous version. Other mods and .cfg files are left untouched.
 
-    Valheim must be closed during the installation. For a dedicated server, use install-server.ps1.
-
-.EXAMPLE
-    irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install.ps1 | iex
+    The server must be stopped during the installation. Windows only. For the game, use install.ps1.
 
 .EXAMPLE
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install.ps1))) -ValheimPath "D:\Games\Valheim"
+    irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install-server.ps1 | iex
+
+.EXAMPLE
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install-server.ps1))) -ServerPath "D:\valheim_server"
 #>
 [CmdletBinding()]
 param(
-    # Valheim game folder. Default: detected through Steam.
-    [string]$ValheimPath,
+    # Dedicated server folder (the one holding valheim_server.exe). Default: detected through Steam.
+    [string]$ServerPath,
     # Release to install, for example v1.2.0. Default: the latest one.
     [string]$Version = 'latest',
     # Local modpack archive to use instead of downloading it.
@@ -29,6 +30,11 @@ param(
     # Reinstalls BepInEx even if it is already present.
     [switch]$ForceBepInEx
 )
+
+# Mods needed on a dedicated server: StackMax (chests clamp stacks server-side), PortalMenu (only the server knows
+# every portal in the world) and QuickBrew (the server permanently owns the barrels around the world spawn).
+# The other mods are client-only.
+$ServerMods = @('StackMax', 'PortalMenu', 'QuickBrew')
 
 # install.ps1 and install-server.ps1 share every function below by copy, so that each one works on its own through
 # irm | iex. Keep both files in sync.
@@ -174,19 +180,24 @@ function Install-Mods([string]$target, [string]$zip, [string[]]$only) {
 
 # ----- Main -----
 
-if ($ValheimPath) {
-    if (-not (Test-Path $ValheimPath -PathType Container)) { throw "Folder not found: $ValheimPath" }
-    $target = (Resolve-Path $ValheimPath).Path
+if ($ServerPath) {
+    if (-not (Test-Path $ServerPath -PathType Container)) { throw "Folder not found: $ServerPath" }
+    $target = (Resolve-Path $ServerPath).Path
+    if (Test-Path (Join-Path $target 'valheim.exe')) {
+        throw "$target is the Valheim game folder: use install.ps1 instead."
+    }
+    if (-not (Test-Path (Join-Path $target 'valheim_server.exe'))) {
+        Write-Warning "valheim_server.exe not found in $target, installing anyway."
+    }
 }
 else {
-    $target = Find-SteamApp 'Valheim' 'valheim.exe'
-    if (-not $target) { throw "Valheim not found in the Steam libraries. Pass the game folder with -ValheimPath." }
+    $target = Find-SteamApp 'Valheim dedicated server' 'valheim_server.exe'
+    if (-not $target) {
+        throw "Valheim dedicated server not found in the Steam libraries. Pass the server folder with -ServerPath."
+    }
 }
-if (Test-Path (Join-Path $target 'valheim_server.exe')) {
-    throw "$target is a dedicated server folder: use install-server.ps1 instead."
-}
-Write-Step "Game folder: $target"
-Assert-NotRunning $target 'valheim'
+Write-Step "Dedicated server folder: $target"
+Assert-NotRunning $target 'valheim_server'
 
 if ($ZipPath) { $ZipPath = (Resolve-Path $ZipPath).Path }
 
@@ -198,7 +209,7 @@ else {
 }
 
 if (-not $BepInExOnly) {
-    Install-Mods $target $ZipPath @()
+    Install-Mods $target $ZipPath $ServerMods
 }
 
-Write-Step 'Done. Launch Valheim from Steam as usual.'
+Write-Step 'Done. Restart the dedicated server to load the mods.'

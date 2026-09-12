@@ -19,11 +19,18 @@ folder is cached (`actions/cache`), keyed on the server's public-branch `buildid
 2 GB download only happens after a game patch. SteamCMD is run once with `+quit` first: its self-update run fails any
 command passed with it ("Missing configuration"). `.github/scripts/Get-ValheimVersion.ps1` reads the game version
 from the IL of `Version..cctor` (the DLL's own version is 0.0.0.0) for the build summary. It
-installs BepInEx and smoke-tests the package through `install.ps1`, so a change to the script is exercised by CI.
-A `v*` tag publishes a release with `valheim-modpack.zip`, which `install.ps1` downloads. Every project in the
-solution ends up in the package; server installs (`-Server`) only take the mods listed in `$ServerMods`.
+installs BepInEx through `install-server.ps1` and smoke-tests the package with both install scripts, so script
+changes are exercised by CI (the server test reads its expected mod list from `$ServerMods` in the script).
+A `v*` tag publishes a release with `valheim-modpack.zip`, which both scripts download. Every project in the
+solution ends up in the package.
+
+Two install scripts: `install.ps1` (game, `-ValheimPath`, every mod) and `install-server.ps1` (dedicated server,
+`-ServerPath`, only `$ServerMods`). They are deliberately self-contained and share their functions by copy, so each
+one runs alone through `irm | iex` without fetching a second file that GitHub's raw cache could serve out of date:
+any change to a shared function must be made in both. Each refuses the other's folder (`valheim.exe` /
+`valheim_server.exe`). Add a mod to `$ServerMods` when it acts on objects the dedicated server can own.
 The CI workflow and everything under `.github/` are written in English (comments, step names, messages).
-`install.ps1` must stay compatible with Windows PowerShell 5.1 and be written in English, ASCII only (no BOM), unlike the mods' French convention: 5.1 decodes `irm` downloads and BOM-less `-File` scripts as a legacy code page, and a UTF-8 BOM turns into
+Both install scripts must stay compatible with Windows PowerShell 5.1 and be written in English, ASCII only (no BOM), unlike the mods' French convention: 5.1 decodes `irm` downloads and BOM-less `-File` scripts as a legacy code page, and a UTF-8 BOM turns into
 garbage before `<#` that breaks parsing of the whole script.
 
 ## Commands
