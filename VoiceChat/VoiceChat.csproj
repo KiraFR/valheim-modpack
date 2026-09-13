@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>VoiceChat</AssemblyName>
     <RootNamespace>VoiceChat</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Description>Experimental: push-to-talk proximity voice chat through the Steam voice API.</Description>
   </PropertyGroup>
 

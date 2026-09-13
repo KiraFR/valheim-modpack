@@ -31,6 +31,8 @@ namespace VoiceChat
     ///   spatialization provides the proximity effect.
     /// - Settings panel (SettingsKey, F7 by default): transmission mode, push-to-talk key, microphone test with a level
     ///   meter, and playback settings. Everything is saved to the .cfg.
+    /// - Display: talking players are listed on the left of the screen, and get a microphone icon next to the name above
+    ///   their head (VoiceHud).
     ///
     /// Multiplayer: nothing is written to ZDOs. Both the speaker and the listener need the mod, and Steam running:
     /// crossplay players without Steam can neither talk nor hear.
@@ -40,7 +42,7 @@ namespace VoiceChat
     {
         public const string PluginGuid = "valheim.voicechat";
         public const string PluginName = "VoiceChat";
-        public const string PluginVersion = "0.1.0";
+        public const string PluginVersion = "0.2.0";
 
         internal const string RpcVoice = "voicechat.Voice";
 
@@ -54,6 +56,11 @@ namespace VoiceChat
         internal static ConfigEntry<float> MinDistance;
         internal static ConfigEntry<float> MaxDistance;
         internal static ConfigEntry<float> BufferMs;
+        internal static ConfigEntry<bool> AutoGain;
+        internal static ConfigEntry<bool> ShowSpeakerList;
+        internal static ConfigEntry<float> SpeakerListX;
+        internal static ConfigEntry<float> SpeakerListY;
+        internal static ConfigEntry<bool> ShowNameplateIcon;
         internal static ConfigEntry<bool> Loopback;
         internal static ConfigEntry<bool> LogStats;
 
@@ -74,7 +81,11 @@ namespace VoiceChat
                 "Opens or closes the voice chat settings panel.");
 
             Volume = Config.Bind("Audio", "Volume", 1f,
-                new ConfigDescription("Volume of received voices.", new AcceptableValueRange<float>(0f, 2f)));
+                new ConfigDescription("Volume of received voices. Above 1 (100%), voices are amplified, with soft limiting " +
+                    "to avoid harsh clipping.", new AcceptableValueRange<float>(0f, 4f)));
+            AutoGain = Config.Bind("Audio", "AutoGain", true,
+                "Evens out microphones: each player's voice is brought towards the same level, quiet ones boosted up to 6x, " +
+                "loud ones left as they are. Applied on top of Volume.");
             MinDistance = Config.Bind("Audio", "MinDistance", 3f,
                 new ConfigDescription("Distance (m) below which a voice plays at full volume.",
                     new AcceptableValueRange<float>(0.5f, 50f)));
@@ -84,6 +95,19 @@ namespace VoiceChat
             BufferMs = Config.Bind("Audio", "BufferMs", 120f,
                 new ConfigDescription("Audio accumulated before a voice starts playing. Higher: fewer dropouts, more latency.",
                     new AcceptableValueRange<float>(20f, 1000f)));
+
+            ShowSpeakerList = Config.Bind("Display", "ShowSpeakerList", true,
+                "Shows who is talking in a list on the left of the screen: a microphone icon and a name per talking player, " +
+                "yourself included while your microphone is open.");
+            SpeakerListX = Config.Bind("Display", "SpeakerListX", 20f,
+                new ConfigDescription("Distance of the speaker list from the left edge of the screen, in HUD units.",
+                    new AcceptableValueRange<float>(0f, 1500f)));
+            SpeakerListY = Config.Bind("Display", "SpeakerListY", 150f,
+                new ConfigDescription("Height of the top of the speaker list above the middle of the screen, in HUD units " +
+                    "(negative: below the middle).", new AcceptableValueRange<float>(-500f, 500f)));
+            ShowNameplateIcon = Config.Bind("Display", "ShowNameplateIcon", true,
+                "Shows a microphone icon next to the name above a talking player's head. The game only shows player names " +
+                "within 10 m, and not for crouching players.");
 
             Loopback = Config.Bind("Debug", "Loopback", false,
                 "Plays your own voice back on your character, without going through the network. Useful to test alone.");
@@ -100,17 +124,14 @@ namespace VoiceChat
         {
             SettingsPanel.Update();
             VoiceCapture.Update();
+            VoiceHud.Update();
             VoiceStats.Update();
-        }
-
-        private void OnGUI()
-        {
-            VoiceIndicator.Draw();
         }
 
         private void OnDestroy()
         {
             SettingsPanel.Destroy();
+            VoiceHud.Destroy();
             VoiceCapture.Stop();
             _harmony?.UnpatchSelf();
         }
@@ -454,6 +475,15 @@ namespace VoiceChat
         /// <summary>Beyond this, the oldest audio is dropped: better to skip a bit than to talk 1 s behind.</summary>
         private const float MaxLatency = 0.5f;
 
+        /// <summary>Automatic gain brings the voice peaks to this amplitude (1 = full scale).</summary>
+        private const float TargetPeak = 0.6f;
+
+        /// <summary>Highest automatic gain: beyond it, a very quiet microphone mostly brings up its own noise.</summary>
+        private const float MaxAutoGain = 6f;
+
+        /// <summary>Time for the peak envelope to fall by half: holds the level across the pauses between words.</summary>
+        private const float EnvelopeHalfLife = 1.5f;
+
         private readonly object _lock = new object();
 
         private int _outputRate;
@@ -487,6 +517,14 @@ namespace VoiceChat
         private int _phraseFailures;
         private EVoiceResult _phraseLastFailure;
         private float _lastPush = -100f;
+
+        /// <summary>Gain the audio thread applies to the voice: Volume times the automatic gain (1 when AutoGain is off).</summary>
+        private volatile float _outputGain = 1f;
+
+        // Automatic gain, main thread only: peak envelope of the received voice, and the gain derived from it.
+        private float _envelope;
+        private float _envelopeTime = -100f;
+        private float _autoGain = 1f;
 
         private void Awake()
         {
@@ -543,7 +581,10 @@ namespace VoiceChat
 
         private void ApplyConfig()
         {
-            _source.volume = Plugin.Volume.Value;
+            // Unity clamps AudioSource.volume to 1, so a Volume above 100% would do nothing there: the source stays at 1
+            // and the gain is applied to the samples in Fill.
+            _source.volume = 1f;
+            _outputGain = Plugin.Volume.Value * (Plugin.AutoGain.Value ? _autoGain : 1f);
             _source.minDistance = Plugin.MinDistance.Value;
             _source.maxDistance = Mathf.Max(Plugin.MinDistance.Value + 1f, Plugin.MaxDistance.Value);
         }
@@ -565,7 +606,8 @@ namespace VoiceChat
                         $"{_phraseSamples * 1000f / _decodeRate:0} ms of voice, max gap between two packets {_phraseMaxGap * 1000f:0} ms, " +
                         $"largest packet {_phraseMaxChunk * 1000f / _decodeRate:0} ms, underruns {underruns}, " +
                         $"failed decodes {_phraseFailures}{(_phraseFailures > 0 ? $" ({_phraseLastFailure})" : "")}, " +
-                        $"buffer {Plugin.BufferMs.Value:0} ms.");
+                        $"buffer {Plugin.BufferMs.Value:0} ms, automatic gain x{_autoGain:0.0}" +
+                        $"{(Plugin.AutoGain.Value ? "" : " (off)")}.");
                 }
                 _phrasePackets = _phraseSamples = _phraseMaxChunk = _phraseFailures = 0;
                 _phraseMaxGap = 0f;
@@ -605,6 +647,7 @@ namespace VoiceChat
             LastPeakTime = now;
 
             if (!play) return;
+            UpdateAutoGain(peak, now);
 
             if (_phrasePackets > 0) _phraseMaxGap = Mathf.Max(_phraseMaxGap, now - LastHeard);
             _phrasePackets++;
@@ -638,6 +681,30 @@ namespace VoiceChat
         }
 
         /// <summary>
+        /// Automatic gain of this speaker. The envelope rises instantly with a louder peak and falls slowly, and the gain
+        /// brings it to TargetPeak, between 1 (never quieter) and MaxAutoGain. A loud packet lowers the gain before it is
+        /// heard, since packets wait in the jitter buffer; a quiet speaker is brought up within a second or two. Steam sends
+        /// nothing during silences, so the background noise between words is not amplified.
+        /// </summary>
+        private void UpdateAutoGain(float peak, float now)
+        {
+            float elapsed = Mathf.Max(0f, now - _envelopeTime);
+            _envelopeTime = now;
+            _envelope = Mathf.Max(peak, _envelope * Mathf.Pow(0.5f, elapsed / EnvelopeHalfLife));
+            _autoGain = Mathf.Clamp(TargetPeak / Mathf.Max(_envelope, 0.0001f), 1f, MaxAutoGain);
+            _outputGain = Plugin.Volume.Value * (Plugin.AutoGain.Value ? _autoGain : 1f);
+        }
+
+        /// <summary>Linear up to 0.8, then compressed towards 1: amplified peaks round off instead of clipping harshly.</summary>
+        private static float SoftClip(float x)
+        {
+            float magnitude = Math.Abs(x);
+            if (magnitude <= 0.8f) return x;
+            float limited = 0.8f + 0.2f * (float)Math.Tanh((magnitude - 0.8f) / 0.2f);
+            return x < 0f ? -limited : limited;
+        }
+
+        /// <summary>
         /// Called by VoiceFilter on the audio thread (hence the lock): multiplies the constant, already spatialized signal
         /// by the voice. <paramref name="data"/> is interleaved over <paramref name="channels"/> channels.
         /// </summary>
@@ -661,6 +728,7 @@ namespace VoiceChat
                 }
                 _prebuffering = false;
 
+                float gain = _outputGain;
                 int frame = 0;
                 for (; frame < frames; frame++)
                 {
@@ -669,7 +737,7 @@ namespace VoiceChat
 
                     float a = _ring[_read];
                     float b = _ring[(_read + 1) % _ring.Length];
-                    float sample = a + (b - a) * (float)_frac;
+                    float sample = SoftClip((a + (b - a) * (float)_frac) * gain);
 
                     int offset = frame * channels;
                     for (int c = 0; c < channels; c++) data[offset + c] *= sample;
@@ -750,6 +818,11 @@ namespace VoiceChat
             "Microphone device, input volume and transmission threshold are set in Steam > Settings > Voice.";
         private const string NoSignalHint =
             "Steam is not sending any voice: check the microphone and the transmission threshold in Steam > Settings > Voice.";
+        private const string QuietHint =
+            "Your microphone is quiet: raise its input volume in Steam > Settings > Voice (others' automatic gain only partly makes up for it).";
+
+        /// <summary>Below this peak during a microphone test, the microphone is reported as quiet.</summary>
+        private const float QuietPeak = 0.15f;
 
         private static readonly Color Background = new Color(0.09f, 0.07f, 0.05f, 0.95f);
         private static readonly Color TextColor = new Color(0.95f, 0.91f, 0.82f);
@@ -777,12 +850,14 @@ namespace VoiceChat
         private static TMP_Text _keyLabel;
         private static TMP_Text _testLabel;
         private static TMP_Text _loopbackLabel;
+        private static TMP_Text _autoGainLabel;
         private static TMP_Text _hint;
         private static RectTransform _meterFill;
         private static Image _meterImage;
 
         private static bool _waitingForKey;
         private static float _testStart;
+        private static float _testMaxPeak;
         private static float _meter;
 
         /// <summary>Microphone test running: the microphone is open for the level meter, and nothing is sent.</summary>
@@ -885,6 +960,7 @@ namespace VoiceChat
             _keyLabel.color = _waitingForKey ? AccentColor : TextColor;
             _testLabel.text = TestActive ? "Stop test" : "Start test";
             _loopbackLabel.text = Plugin.Loopback.Value ? "On" : "Off";
+            _autoGainLabel.text = Plugin.AutoGain.Value ? "On" : "Off";
 
             foreach (SliderRow row in Sliders)
             {
@@ -909,12 +985,19 @@ namespace VoiceChat
         {
             TestActive = !TestActive;
             _testStart = Time.unscaledTime;
+            _testMaxPeak = 0f;
             Refresh();
         }
 
         private static void ToggleLoopback()
         {
             Plugin.Loopback.Value = !Plugin.Loopback.Value;
+            Refresh();
+        }
+
+        private static void ToggleAutoGain()
+        {
+            Plugin.AutoGain.Value = !Plugin.AutoGain.Value;
             Refresh();
         }
 
@@ -956,9 +1039,14 @@ namespace VoiceChat
             _meterFill.anchorMax = new Vector2(_meter, 1f);
             _meterImage.color = _meter > 0.92f ? MeterHotColor : MeterColor;
 
-            bool silent = TestActive && now - _testStart > 2f && (speaker == null || speaker.LastPeakTime < _testStart);
-            _hint.text = silent ? NoSignalHint : DefaultHint;
-            _hint.color = silent ? AccentColor : DimColor;
+            bool heard = speaker != null && speaker.LastPeakTime >= _testStart;
+            if (TestActive && heard) _testMaxPeak = Mathf.Max(_testMaxPeak, speaker.LastPeak);
+
+            // Steam's raw level is what the others receive: a quiet microphone is best fixed at the source.
+            bool silent = TestActive && now - _testStart > 2f && !heard;
+            bool quiet = TestActive && heard && now - _testStart > 4f && _testMaxPeak < QuietPeak;
+            _hint.text = silent ? NoSignalHint : quiet ? QuietHint : DefaultHint;
+            _hint.color = silent || quiet ? AccentColor : DimColor;
         }
 
         private static float ToMeterScale(float peak)
@@ -1027,6 +1115,7 @@ namespace VoiceChat
 
             NewLine(root, "Playback", 17f, AccentColor, 30f);
             NewSliderRow(root, "Voice volume", Plugin.Volume, 0.05f, v => $"{v * 100f:0} %");
+            _autoGainLabel = NewButton(ControlArea(NewRow(root, "Automatic gain")), ToggleAutoGain);
             NewSliderRow(root, "Full volume within", Plugin.MinDistance, 0.5f, v => $"{v:0.0} m");
             NewSliderRow(root, "Heard up to", Plugin.MaxDistance, 1f, v => $"{v:0} m");
             NewSliderRow(root, "Latency buffer", Plugin.BufferMs, 10f, v => $"{v:0} ms");
@@ -1205,7 +1294,7 @@ namespace VoiceChat
         }
 
         /// <summary>The game's canvas, reached through a GUI that always exists in a session.</summary>
-        private static Transform FindCanvas()
+        internal static Transform FindCanvas()
         {
             Component anchor = null;
             if (StoreGui.instance != null) anchor = StoreGui.instance;
@@ -1221,7 +1310,7 @@ namespace VoiceChat
         /// Font borrowed from a game text, so no asset is shipped. Aims at the serif font of the hover text: the first text
         /// found on the canvas can be an unreadable pixel font.
         /// </summary>
-        private static TMP_FontAsset FindFont(Transform canvas)
+        internal static TMP_FontAsset FindFont(Transform canvas)
         {
             if (Hud.instance != null && Hud.instance.m_hoverName != null && Hud.instance.m_hoverName.font != null)
                 return Hud.instance.m_hoverName.font;
@@ -1246,34 +1335,270 @@ namespace VoiceChat
 
     // ================================================================== display and stats
 
-    internal static class VoiceIndicator
+    /// <summary>
+    /// Who is talking: a list on the left of the screen, with a microphone icon and a name per talking player (yourself
+    /// included while your microphone is open), and a microphone icon next to the name above a talking player's head.
+    /// Both are uGUI with the game's font; the icon is drawn in code, so no asset is shipped.
+    /// </summary>
+    internal static class VoiceHud
     {
-        private static GUIStyle _style;
+        private const string ListName = "VoiceChat_Speakers";
+        private const string NameplateIconName = "VoiceChat_Mic";
 
-        internal static void Draw()
+        /// <summary>A player counts as talking for this long after their last played packet, bridging the gaps between packets.</summary>
+        private const float TalkingHold = 0.3f;
+
+        private const float RowHeight = 28f;
+        private const float IconSize = 22f;
+
+        private static readonly Color SelfColor = new Color(0.45f, 0.85f, 0.4f);
+        private static readonly Color OthersColor = new Color(1f, 0.85f, 0.4f);
+        private static readonly Color NameColor = new Color(0.95f, 0.91f, 0.82f);
+
+        private sealed class Row
         {
-            if (!Plugin.Enabled.Value || Player.m_localPlayer == null) return;
+            public GameObject Root;
+            public Image Icon;
+            public TMP_Text Name;
+        }
 
-            List<string> lines = new List<string>();
-            if (VoiceCapture.Testing) lines.Add("● Microphone test");
-            else if (VoiceCapture.Transmitting) lines.Add("● Mic open");
+        private static readonly List<Row> Rows = new List<Row>();
+        private static readonly List<string> Names = new List<string>();
+        private static readonly List<Color> Colors = new List<Color>();
 
-            float now = Time.unscaledTime;
-            foreach (Player player in Player.GetAllPlayers())
+        private static RectTransform _list;
+        private static TMP_FontAsset _font;
+        private static Sprite _micSprite;
+
+        internal static bool IsTalking(Character character)
+        {
+            VoiceSpeaker voice = character != null ? character.GetComponent<VoiceSpeaker>() : null;
+            return voice != null && Time.unscaledTime - voice.LastHeard < TalkingHold;
+        }
+
+        // -------------------------------------------------------------- speaker list
+
+        internal static void Update()
+        {
+            Player local = Player.m_localPlayer;
+            Names.Clear();
+            Colors.Clear();
+            if (Plugin.Enabled.Value && Plugin.ShowSpeakerList.Value && local != null && !Hud.IsUserHidden())
             {
-                if (player == null) continue;
-                VoiceSpeaker voice = player.GetComponent<VoiceSpeaker>();
-                if (voice != null && now - voice.LastHeard < 0.3f) lines.Add("♪ " + player.GetPlayerName());
-            }
-            if (lines.Count == 0) return;
+                if (VoiceCapture.Testing) Add("Microphone test", SelfColor);
+                else if (VoiceCapture.Transmitting) Add(local.GetPlayerName(), SelfColor);
 
-            if (_style == null)
+                foreach (Player player in Player.GetAllPlayers())
+                {
+                    // Yourself is already listed while the microphone is open, even when Loopback plays your voice.
+                    if (player != null && player != local && IsTalking(player)) Add(player.GetPlayerName(), OthersColor);
+                }
+            }
+
+            if (Names.Count == 0)
             {
-                _style = new GUIStyle(GUI.skin.label) { fontSize = 18, alignment = TextAnchor.UpperCenter };
-                _style.normal.textColor = new Color(1f, 0.85f, 0.4f);
+                if (_list != null) _list.gameObject.SetActive(false);
+                return;
             }
+            if (!BuildList()) return;
 
-            GUI.Label(new Rect(Screen.width / 2f - 200f, 60f, 400f, 30f * lines.Count), string.Join("\n", lines), _style);
+            _list.gameObject.SetActive(true);
+            _list.anchoredPosition = new Vector2(Plugin.SpeakerListX.Value, Plugin.SpeakerListY.Value);
+            while (Rows.Count < Names.Count) Rows.Add(NewRow());
+            for (int i = 0; i < Rows.Count; i++)
+            {
+                bool used = i < Names.Count;
+                Rows[i].Root.SetActive(used);
+                if (!used) continue;
+                Rows[i].Name.text = Names[i];
+                Rows[i].Icon.color = Colors[i];
+            }
+        }
+
+        private static void Add(string name, Color color)
+        {
+            Names.Add(name);
+            Colors.Add(color);
+        }
+
+        /// <summary>Built on first use, and again after the game destroyed the canvas (back to the main menu).</summary>
+        private static bool BuildList()
+        {
+            if (_list != null) return true;
+            Rows.Clear();
+
+            Transform canvas = SettingsPanel.FindCanvas();
+            _font = canvas != null ? SettingsPanel.FindFont(canvas) : null;
+            if (_font == null) return false;
+
+            var go = new GameObject(ListName, typeof(RectTransform));
+            _list = (RectTransform)go.transform;
+            _list.SetParent(canvas, false);
+            // Anchored on the middle of the left edge; the list grows downwards from its position.
+            _list.anchorMin = new Vector2(0f, 0.5f);
+            _list.anchorMax = new Vector2(0f, 0.5f);
+            _list.pivot = new Vector2(0f, 1f);
+            _list.sizeDelta = new Vector2(320f, 0f);
+
+            // Display only: clicks go through to the game.
+            var group = go.AddComponent<CanvasGroup>();
+            group.interactable = false;
+            group.blocksRaycasts = false;
+
+            var stack = go.AddComponent<VerticalLayoutGroup>();
+            stack.spacing = 2f;
+            stack.childControlWidth = true;
+            stack.childControlHeight = true;
+            stack.childForceExpandWidth = true;
+            stack.childForceExpandHeight = false;
+            go.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            return true;
+        }
+
+        private static Row NewRow()
+        {
+            var root = new GameObject("row", typeof(RectTransform));
+            root.transform.SetParent(_list, false);
+            root.AddComponent<LayoutElement>().preferredHeight = RowHeight;
+
+            var iconObject = new GameObject("icon", typeof(RectTransform));
+            var iconRect = (RectTransform)iconObject.transform;
+            iconRect.SetParent(root.transform, false);
+            iconRect.anchorMin = new Vector2(0f, 0.5f);
+            iconRect.anchorMax = new Vector2(0f, 0.5f);
+            iconRect.pivot = new Vector2(0f, 0.5f);
+            iconRect.sizeDelta = new Vector2(IconSize, IconSize);
+            var icon = iconObject.AddComponent<Image>();
+            icon.sprite = MicSprite;
+            icon.preserveAspect = true;
+            icon.raycastTarget = false;
+
+            var nameObject = new GameObject("name", typeof(RectTransform));
+            var nameRect = (RectTransform)nameObject.transform;
+            nameRect.SetParent(root.transform, false);
+            nameRect.anchorMin = new Vector2(0f, 0f);
+            nameRect.anchorMax = new Vector2(1f, 1f);
+            nameRect.offsetMin = new Vector2(IconSize + 6f, 0f);
+            nameRect.offsetMax = Vector2.zero;
+            var name = nameObject.AddComponent<TextMeshProUGUI>();
+            name.font = _font;
+            name.fontSize = 18f;
+            name.color = NameColor;
+            name.alignment = TextAlignmentOptions.Left;
+            name.raycastTarget = false;
+            name.textWrappingMode = TextWrappingModes.NoWrap;
+            name.overflowMode = TextOverflowModes.Ellipsis;
+
+            return new Row { Root = root, Icon = icon, Name = name };
+        }
+
+        internal static void Destroy()
+        {
+            if (_list != null) UnityEngine.Object.Destroy(_list.gameObject);
+            _list = null;
+            Rows.Clear();
+        }
+
+        // -------------------------------------------------------------- nameplates
+
+        /// <summary>
+        /// Called after EnemyHud.UpdateHuds, which rewrites every name each frame: the icon is a child image of the name text
+        /// placed after the rendered text, rather than a character added to the name.
+        /// </summary>
+        internal static void UpdateNameplates(EnemyHud hud)
+        {
+            bool enabled = Plugin.Enabled.Value && Plugin.ShowNameplateIcon.Value;
+            foreach (var pair in hud.m_huds)
+            {
+                TMP_Text name = pair.Value.m_name;
+                if (pair.Key == null || name == null || !pair.Key.IsPlayer()) continue;
+
+                Transform icon = name.transform.Find(NameplateIconName);
+                bool talking = enabled && IsTalking(pair.Key);
+                if (icon == null)
+                {
+                    if (!talking) continue;
+                    icon = NewNameplateIcon(name);
+                }
+                icon.gameObject.SetActive(talking);
+                if (talking) PlaceNameplateIcon((RectTransform)icon, name);
+            }
+        }
+
+        private static Transform NewNameplateIcon(TMP_Text name)
+        {
+            var go = new GameObject(NameplateIconName, typeof(RectTransform));
+            go.transform.SetParent(name.transform, false);
+            var image = go.AddComponent<Image>();
+            image.sprite = MicSprite;
+            image.preserveAspect = true;
+            image.raycastTarget = false;
+            image.color = OthersColor;
+            return go.transform;
+        }
+
+        /// <summary>
+        /// Right after the rendered text. textBounds is in the name's local space, whose origin is its pivot, so the icon is
+        /// anchored on that pivot. Until the text has been laid out once, half its preferred width stands in.
+        /// </summary>
+        private static void PlaceNameplateIcon(RectTransform icon, TMP_Text name)
+        {
+            float size = Mathf.Max(14f, name.fontSize * 1.1f);
+            Bounds bounds = name.textBounds;
+            bool laidOut = bounds.size.x > 0f;
+            float right = laidOut ? bounds.max.x : name.preferredWidth * 0.5f;
+            icon.anchorMin = name.rectTransform.pivot;
+            icon.anchorMax = name.rectTransform.pivot;
+            icon.sizeDelta = new Vector2(size, size);
+            icon.anchoredPosition = new Vector2(right + 4f + size * 0.5f, laidOut ? bounds.center.y : 0f);
+        }
+
+        // -------------------------------------------------------------- icon
+
+        private static Sprite MicSprite
+        {
+            get
+            {
+                if (_micSprite == null) _micSprite = CreateMicSprite();
+                return _micSprite;
+            }
+        }
+
+        /// <summary>
+        /// Microphone drawn with signed distances on a 32-unit grid (a capsule, the lower half of a ring holding it, a stem
+        /// and a base), rendered at 64 px with a one-pixel antialiased edge. White on transparent, so Image.color tints it.
+        /// </summary>
+        private static Sprite CreateMicSprite()
+        {
+            const int size = 64;
+            float scale = size / 32f;
+            var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            texture.filterMode = FilterMode.Bilinear;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    var p = new Vector2((x + 0.5f) / scale, (y + 0.5f) / scale);
+                    float distance = DistanceToSegment(p, new Vector2(16f, 16f), new Vector2(16f, 24f)) - 4.5f;
+                    float ring = p.y <= 17f
+                        ? Mathf.Abs(Vector2.Distance(p, new Vector2(16f, 17f)) - 9f) - 1.25f
+                        : Mathf.Min(Vector2.Distance(p, new Vector2(7f, 17f)), Vector2.Distance(p, new Vector2(25f, 17f))) - 1.25f;
+                    distance = Mathf.Min(distance, ring);
+                    distance = Mathf.Min(distance, DistanceToSegment(p, new Vector2(16f, 8f), new Vector2(16f, 4f)) - 1.25f);
+                    distance = Mathf.Min(distance, DistanceToSegment(p, new Vector2(11f, 4f), new Vector2(21f, 4f)) - 1.25f);
+                    texture.SetPixel(x, y, new Color(1f, 1f, 1f, Mathf.Clamp01(0.5f - distance * scale)));
+                }
+            }
+            texture.Apply();
+            return Sprite.Create(texture, new Rect(0f, 0f, size, size), new Vector2(0.5f, 0.5f), 100f);
+        }
+
+        private static float DistanceToSegment(Vector2 p, Vector2 a, Vector2 b)
+        {
+            Vector2 ab = b - a;
+            float t = Mathf.Clamp01(Vector2.Dot(p - a, ab) / ab.sqrMagnitude);
+            return Vector2.Distance(p, a + ab * t);
         }
     }
 
@@ -1312,6 +1637,16 @@ namespace VoiceChat
     }
 
     // ================================================================== patches
+
+    /// <summary>Talking players get a microphone icon next to the name above their head.</summary>
+    [HarmonyPatch(typeof(EnemyHud), nameof(EnemyHud.UpdateHuds))]
+    internal static class EnemyHud_UpdateHuds_Patch
+    {
+        private static void Postfix(EnemyHud __instance)
+        {
+            VoiceHud.UpdateNameplates(__instance);
+        }
+    }
 
     /// <summary>The game registers its routed RPCs in Game.Start: ours are added there.</summary>
     [HarmonyPatch(typeof(Game), nameof(Game.Start))]
