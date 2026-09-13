@@ -16,8 +16,8 @@ Le script trouve Valheim dans les bibliothèques Steam (ou demande son dossier),
 avec les flèches :
 
 - **Install or update mods** : une case à cocher par mod de la dernière release, avec sa version et sa description.
-  Espace coche ou décoche, Entrée valide. Les mods déjà installés sont cochés, donc relancer la commande met à jour
-  la même sélection ; décocher un mod installé le retire. BepInExPack Valheim (Thunderstore) est installé s'il manque,
+  Espace coche ou décoche, Entrée valide. Les mods déjà installés sont cochés (au premier lancement, tous les mods sauf
+  les expérimentaux), donc relancer la commande met à jour la même sélection ; décocher un mod installé le retire. BepInExPack Valheim (Thunderstore) est installé s'il manque,
   et chaque mod coché est copié dans `BepInEx/plugins/<Mod>/`.
 - **Uninstall** : une case par mod du modpack installé, puis s'il faut supprimer leurs réglages (`.cfg`) et retirer
   BepInEx lui-même, ce qui rend un dossier de jeu vanilla.
@@ -40,8 +40,8 @@ hébergeurs sans accès PowerShell demandent une copie manuelle de l'archive.
 
 Via `& ([scriptblock]::Create((irm <url>))) <paramètres>` ou `powershell -ExecutionPolicy Bypass -File <script> <paramètres>`.
 `-Mods`, `-Uninstall` et `-BepInExOnly` sautent les menus, tout comme un lancement hors console interactive (CI,
-entrée redirigée) : les paramètres décident, et par défaut tous les mods sont installés (tous les mods serveur pour
-`install-server.ps1`).
+entrée redirigée) : les paramètres décident, et par défaut tous les mods sauf les expérimentaux sont installés (tous les mods
+serveur pour `install-server.ps1`).
 
 | Paramètre | Effet |
 |---|---|
@@ -109,6 +109,7 @@ Le dossier `decompiled/` est ignoré par git. Classes utiles : `Player`, `Charac
 | `PortalMenu` | Un portail n'est plus lié à un seul autre : interagir avec lui ouvre la liste de tous les portails du monde (nom, biome, distance) et cliquer sur une ligne téléporte. Permet de tenir un réseau entier avec un portail par lieu au lieu d'une paire par liaison. Aucune connexion `ZDOExtraData.ConnectionType.Portal` n'est écrite : le voyage réutilise `Player.TeleportTo` avec les coordonnées choisies, donc la sauvegarde reste vanilla et désinstaller le mod rend des portails normaux. Les garde-fous du jeu sont repris tels quels (clés globales `NoPortals` / `NoBossPortals`, minerai interdit). `Rename` rouvre le champ de nom vanilla, `Sort` bascule nom/distance, `Échap` ferme. Config : `UnnamedPortals`, `SortByDistance`, `AllowAllItems`, `MaxDistance`, `ShowBiome`, `DisableVanillaPairing`, taille, `Scale` et couleur du panneau. Le panneau a son propre `Canvas` en tri forcé pour passer devant le HUD, et les entrées sont coupées dans `PlayerController.TakeInput` (déplacements, regard) autant que dans `Player.TakeInput` (interaction). **À installer aussi sur le serveur dédié** : seul le serveur tient le registre complet des portails (`ZDOMan.GetPortalList`), un client ne connaît que ses secteurs proches. Sans le mod côté serveur, le panneau n'affiche que les portails alentour et l'annonce. |
 | `QuickBrew` | Réduit la durée de fermentation des tonneaux (hydromels, potions) : `Multiplier` × durée vanilla (2400 s), 0.025 par défaut soit 1 min. Le mod antidate l'heure de départ stockée dans le ZDO du tonneau au lieu de changer la durée localement, donc tous les joueurs, avec ou sans le mod, voient le tonneau prêt au même moment. Rattrape les tonneaux déjà remplis avant l'installation et les chronos remis à zéro faute de toit. `ShowRemainingTime` ajoute « Ready in … » au survol. Seul le propriétaire réseau du tonneau (un joueur proche) applique le décalage : s'il n'a pas le mod, le tonneau fermente à la vitesse vanilla, sans rien casser. À installer chez tous les joueurs pour un effet garanti. **À installer aussi sur le serveur dédié** : sa position de référence reste au centre du monde, il possède donc en permanence les tonneaux proches du point d'apparition (`ZDOMan.ReleaseNearbyZDOS` ne les cède jamais à un joueur) ; sans le mod côté serveur, ces tonneaux fermentent à la vitesse vanilla. |
 | `RowTogether` | Les passagers assis rament avec le barreur, sans aucune touche : quand le barreur rame, chaque passager assis (emote « s'asseoir ») ajoute sa poussée, sans notion de côté : x(1 + bonus × rameurs). `LimitToSailSpeed` bride la rame à la vitesse voile de la coque. Client uniquement, mais chez tous les joueurs qui montent à bord : la physique tourne chez le propriétaire réseau du bateau, qui est un joueur à bord, pas forcément le barreur. Inutile sur le serveur dédié. |
+| `VoiceChat` | **Expérimental : décoché par défaut dans le menu d'installation.** Chat vocal de proximité : maintenir `B` pour parler (ou passer en micro ouvert), les voix sont jouées en 3D depuis la tête du joueur qui parle et baissent avec la distance. La capture et la compression passent par l'API voix de Steam : le micro, le volume d'entrée et le seuil de transmission se règlent dans Steam > Paramètres > Voix, et les joueurs crossplay sans Steam ne peuvent ni parler ni entendre. `F7` ouvre un panneau de réglages : mode de transmission, touche push-to-talk, test du micro avec vumètre (rien n'est envoyé pendant le test), volume, distances et réserve de latence. La voix passe par des RPC routés adressés à chaque joueur à portée, que le serveur relaie sans avoir besoin du mod. Tous les joueurs qui parlent ou écoutent en ont besoin. |
 
 ## Créer un nouveau mod
 

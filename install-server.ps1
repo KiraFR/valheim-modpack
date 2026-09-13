@@ -342,8 +342,11 @@ function Get-Modpack([string]$temp) {
     $list = @()
     foreach ($folder in Get-ChildItem $sources -Directory | Sort-Object Name) {
         $info = Get-ModInfo (Join-Path $folder.FullName "$($folder.Name).dll")
+        # A mod whose description (its .csproj Description) starts with "Experimental" is only installed when chosen:
+        # unchecked by default in the menu, and left out of the install without a menu unless named in -Mods.
         $list += [pscustomobject]@{
             Name = $folder.Name; Folder = $folder.FullName; Version = $info.Version; Description = $info.Description
+            Experimental = ($info.Description -match '^\s*Experimental\b')
         }
     }
     if ($list.Count -eq 0) { throw "Unexpected modpack archive: no mod in BepInEx\plugins." }
@@ -449,12 +452,13 @@ function Invoke-Install([string]$target, [string[]]$scope, [bool]$interactive, [
             if ($selected.Count -eq 0) { throw 'None of the mods given with -Mods is in the modpack.' }
         }
         elseif ($interactive) {
-            # Installed mods are checked, so an update keeps the same set; on a first install, every offered mod is.
+            # Installed mods are checked, so an update keeps the same set; on a first install, every offered mod except
+            # the experimental ones is.
             $checked = New-Object bool[] $offered.Count
             $versions = @{}
             for ($index = 0; $index -lt $offered.Count; $index++) {
                 $name = $offered[$index].Name
-                $checked[$index] = ($installed.Count -eq 0) -or ($installed -contains $name)
+                $checked[$index] = ($installed -contains $name) -or ($installed.Count -eq 0 -and -not $offered[$index].Experimental)
                 $versions[$name] = Get-InstalledVersion $target $name
             }
             $label = {
@@ -478,7 +482,8 @@ function Invoke-Install([string]$target, [string[]]$scope, [bool]$interactive, [
             if ($selected.Count -eq 0 -and $remove.Count -eq 0) { Write-Step 'No mod checked, nothing changed.'; return }
         }
         else {
-            $selected = $offeredNames
+            # Without a menu, experimental mods are only installed when named in -Mods.
+            $selected = @($offered | Where-Object { -not $_.Experimental } | ForEach-Object { $_.Name })
         }
 
         if ($selected.Count -gt 0) {

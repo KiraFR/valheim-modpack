@@ -14,9 +14,10 @@ Git commit messages are written in English.
 
 Git repository published at https://github.com/KiraFR/valheim-modpack. `decompiled/` holds ILSpy output of game
 classes for reference only and is gitignored. `Transmute/` is gitignored too: it stays local, out of the solution
-and out of the modpack. `VoiceChat/` (proximity voice chat through the Steam voice API) is experimental: tracked in
-git but deliberately out of the solution, so CI does not build it and it is not in the modpack; build it with
-`dotnet build VoiceChat/VoiceChat.csproj -c Release`. `dist/` holds old hand-made zips and is ignored.
+and out of the modpack. `VoiceChat/` (proximity voice chat through the Steam voice API) is experimental: it is in the
+solution and the modpack, but its `.csproj` Description starts with "Experimental", which makes both install scripts
+leave it unchecked in the menu and out of the install without a menu (only installed when chosen or named in
+`-Mods`). Any mod can use that prefix the same way. `dist/` holds old hand-made zips and is ignored.
 
 CI (`.github/workflows/build.yml`, Windows runner) cannot use the game's proprietary DLLs, so it installs the Valheim
 dedicated server with SteamCMD (anonymous, app 896660) and builds against `valheim_server_Data/Managed`. Only that

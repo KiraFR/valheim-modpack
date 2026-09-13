@@ -99,7 +99,7 @@ jobs:
         run: |
           $valheim = Join-Path $env:RUNNER_TEMP 'valheim'
           $managed = Join-Path $valheim 'valheim_server_Data\Managed'
-          foreach ($dll in 'assembly_valheim', 'assembly_utils', 'assembly_guiutils', 'Unity.TextMeshPro', 'UnityEngine') {
+          foreach ($dll in 'assembly_valheim', 'assembly_utils', 'assembly_guiutils', 'Unity.TextMeshPro', 'UnityEngine', 'com.rlabrecque.steamworks.net') {
             if (-not (Test-Path "$managed\$dll.dll")) { throw "Missing from the dedicated server: $dll.dll" }
           }
           $version = ./.github/scripts/Get-ValheimVersion.ps1 "$managed\assembly_valheim.dll"
@@ -142,7 +142,13 @@ jobs:
         shell: pwsh
         run: |
           $zip = (Resolve-Path 'valheim-modpack.zip').Path
-          $allMods = (Get-ChildItem "$env:RUNNER_TEMP\package\BepInEx\plugins" -Directory | ForEach-Object Name | Sort-Object) -join ', '
+          # A mod whose DLL description starts with "Experimental" is left out of the default install.
+          $packageMods = @(Get-ChildItem "$env:RUNNER_TEMP\package\BepInEx\plugins" -Directory | Sort-Object Name | ForEach-Object {
+            $description = (Get-Item (Join-Path $_.FullName "$($_.Name).dll")).VersionInfo.Comments
+            [pscustomobject]@{ Name = $_.Name; Experimental = ($description -match '^\s*Experimental\b') }
+          })
+          $defaultMods = (@($packageMods | Where-Object { -not $_.Experimental } | ForEach-Object Name)) -join ', '
+          $experimentalMods = @($packageMods | Where-Object { $_.Experimental } | ForEach-Object Name)
           # The server list is read from the script itself, so the test follows any change to $ServerMods.
           $serverList = [regex]::Match((Get-Content install-server.ps1 -Raw), '\$ServerMods = @\(([^)]*)\)').Groups[1].Value
           $serverMods = (@([regex]::Matches($serverList, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) | Sort-Object) -join ', '
@@ -170,7 +176,7 @@ jobs:
           $game = New-Target 'game'
           ./install.ps1 -ValheimPath $game -ZipPath $zip
           Assert-BepInEx $game
-          Assert-Equal 'install.ps1 installs every mod' (Get-Mods $game) $allMods
+          Assert-Equal 'install.ps1 installs every non-experimental mod' (Get-Mods $game) $defaultMods
 
           $server = New-Target 'server'
           ./install-server.ps1 -ServerPath $server -ZipPath $zip
@@ -181,6 +187,13 @@ jobs:
           $subset = New-Target 'subset'
           ./install.ps1 -ValheimPath $subset -ZipPath $zip -Mods 'stackmax, QuickBrew'
           Assert-Equal '-Mods installs only the given mods' (Get-Mods $subset) 'QuickBrew, StackMax'
+
+          # An experimental mod is installed when named in -Mods.
+          foreach ($mod in $experimentalMods) {
+            $folder = New-Target "experimental-$mod"
+            ./install.ps1 -ValheimPath $folder -ZipPath $zip -Mods $mod
+            Assert-Equal "-Mods installs experimental $mod" (Get-Mods $folder) $mod
+          }
 
           # Uninstalling one mod with its settings leaves the other mod, its settings and BepInEx's own BepInEx.cfg
           # (shipped by BepInExPack).
