@@ -91,33 +91,40 @@ function Get-SteamLibraries {
         $root = $root -replace '/', '\'
         if (-not (Test-Path $root)) { continue }
         $libraries += $root
-        # Every drive where Steam installs games is listed in libraryfolders.vdf ("path" "D:\\SteamLibrary").
+        # Every drive where Steam installs games is listed in libraryfolders.vdf ("path" "D:\\SteamLibrary"). The list
+        # keeps libraries whose drive is gone (unplugged external disk, removed drive): they are skipped here, since
+        # Join-Path throws DriveNotFoundException on a missing drive while Test-Path just returns false.
         $vdf = Join-Path $root 'steamapps\libraryfolders.vdf'
         if (Test-Path $vdf) {
             foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) {
-                $libraries += $m.Groups[1].Value -replace '\\\\', '\'
+                $library = $m.Groups[1].Value -replace '\\\\', '\'
+                if (Test-Path -LiteralPath $library) { $libraries += $library }
             }
         }
     }
     return $libraries | ForEach-Object { $_.TrimEnd('\') } | Sort-Object -Unique
 }
 
+# [IO.Path]::Combine rather than Join-Path: it does not require the drive to exist.
 function Find-SteamApp([string]$folder, [string]$exe) {
     foreach ($library in Get-SteamLibraries) {
-        $path = Join-Path $library "steamapps\common\$folder"
-        if (Test-Path (Join-Path $path $exe)) { return $path }
+        $path = [IO.Path]::Combine($library, 'steamapps', 'common', $folder)
+        if (Test-Path -LiteralPath ([IO.Path]::Combine($path, $exe))) { return $path }
     }
     return $null
 }
 
 # Asks for the folder when Steam detection fails. A path copied from the Explorer address bar or "Copy as path" (with
-# quotes) is accepted. Returns $null when the answer is empty.
+# quotes) is accepted. Returns $null when the answer is empty. A missing drive or characters invalid in a path are
+# answered like a wrong folder instead of stopping the script.
 function Read-TargetFolder([string]$what, [string]$exe) {
     Write-Host "  $what was not found in the Steam libraries." -ForegroundColor Yellow
     while ($true) {
         $answer = ([string](Read-Host "  Folder holding $exe (empty to cancel)")).Trim().Trim('"')
         if (-not $answer) { return $null }
-        if (Test-Path -LiteralPath (Join-Path $answer $exe)) { return (Resolve-Path -LiteralPath $answer).Path }
+        $found = $false
+        try { $found = Test-Path -LiteralPath ([IO.Path]::Combine($answer, $exe)) } catch { }
+        if ($found) { return (Resolve-Path -LiteralPath $answer).Path }
         Write-Host "  $exe is not in $answer" -ForegroundColor Yellow
     }
 }
