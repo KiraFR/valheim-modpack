@@ -29,7 +29,7 @@ namespace ChestStack
     ///   the vanilla behaviour of both game controls.
     ///
     /// Protections: worn equipment is already spared by StackAll itself, which tests IsItemEquiped.
-    /// The hotbar and everything that feeds are added through a Postfix on that same IsItemEquiped, which
+    /// The hotbar, everything that feeds and meads are added through a Postfix on that same IsItemEquiped, which
     /// answers "equipped" for these items. It is the only per-item test StackAll consults, so the filter
     /// is exact down to the stack, without rewriting StackAll or touching how the inventory is read.
     /// "Everything that feeds" uses the game's own definition (m_food, m_foodStamina, m_foodEitr), the one
@@ -50,7 +50,7 @@ namespace ChestStack
     {
         public const string PluginGuid = "valheim.cheststack";
         public const string PluginName = "ChestStack";
-        public const string PluginVersion = "1.0.2";
+        public const string PluginVersion = "1.0.3";
 
         internal static ManualLogSource Log;
 
@@ -58,6 +58,7 @@ namespace ChestStack
         internal static ConfigEntry<float> Radius;
         internal static ConfigEntry<bool> ProtectHotbar;
         internal static ConfigEntry<bool> ProtectFood;
+        internal static ConfigEntry<bool> ProtectMeads;
         internal static ConfigEntry<bool> ExtendGameControls;
         internal static ConfigEntry<bool> ProtectOutsideMod;
         internal static ConfigEntry<float> ResponseDelay;
@@ -114,6 +115,10 @@ namespace ChestStack
                 "Leaves in place everything that feeds, according to the game's definition (health, stamina " +
                 "or eitr). Raw meat and fish are materials with no nutritional value: they go to the chest.");
             MigrateKey(ProtectFood, "General", "ProtegerNourriture");
+
+            ProtectMeads = Config.Bind("General", "ProtectMeads", true,
+                "Leaves meads and every other drinkable potion in place (health, stamina, eitr, resistances). " +
+                "Mead bases still waiting for the fermenter are materials: they go to the chest.");
 
             ExtendGameControls = Config.Bind("General", "ExtendGameControls", true,
                 "Makes the game's controls act on the whole neighbourhood instead of the single open chest: " +
@@ -480,7 +485,19 @@ namespace ChestStack
             if (item == null) return false;
             if (ProtectHotbar.Value && item.m_gridPos.y == 0) return true;
             if (ProtectFood.Value && IsEdible(item)) return true;
+            if (ProtectMeads.Value && IsMead(item)) return true;
             return false;
+        }
+
+        /// <summary>
+        /// A consumable whose effect is a status effect rather than food: meads and potions. They have no food
+        /// value, so IsEdible misses them. Mead bases are materials, so they fail the type test and get stored.
+        /// </summary>
+        private static bool IsMead(ItemDrop.ItemData item)
+        {
+            ItemDrop.ItemData.SharedData shared = item.m_shared;
+            if (shared == null) return false;
+            return shared.m_itemType == ItemDrop.ItemData.ItemType.Consumable && shared.m_consumeStatusEffect != null;
         }
 
         /// <summary>

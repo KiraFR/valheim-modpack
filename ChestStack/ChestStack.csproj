@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>ChestStack</AssemblyName>
     <RootNamespace>ChestStack</RootNamespace>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Description>Stores the whole bag into the surrounding chests with a single key press, each item joining its peers.</Description>
   </PropertyGroup>
 
