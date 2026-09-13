@@ -182,13 +182,14 @@ jobs:
           ./install.ps1 -ValheimPath $subset -ZipPath $zip -Mods 'stackmax, QuickBrew'
           Assert-Equal '-Mods installs only the given mods' (Get-Mods $subset) 'QuickBrew, StackMax'
 
-          # Uninstalling one mod with its settings leaves the other mod and its settings.
+          # Uninstalling one mod with its settings leaves the other mod, its settings and BepInEx's own BepInEx.cfg
+          # (shipped by BepInExPack).
           $config = Join-Path $subset 'BepInEx\config'
           New-Item -ItemType Directory -Force $config | Out-Null
           foreach ($file in 'valheim.quickbrew.cfg', 'valheim.stackmax.cfg') { 'x' | Set-Content (Join-Path $config $file) }
           ./install.ps1 -ValheimPath $subset -Uninstall -Mods QuickBrew -RemoveConfig
           Assert-Equal '-Uninstall -Mods removes only that mod' (Get-Mods $subset) 'StackMax'
-          Assert-Equal '-RemoveConfig deletes only its settings' ((Get-ChildItem $config | ForEach-Object Name) -join ', ') 'valheim.stackmax.cfg'
+          Assert-Equal '-RemoveConfig deletes only its settings' ((Get-ChildItem $config -File | ForEach-Object Name | Sort-Object) -join ', ') 'BepInEx.cfg, valheim.stackmax.cfg'
 
           # Uninstalling the modpack leaves mods installed from elsewhere, and BepInEx.
           New-Item -ItemType Directory -Force (Join-Path $server 'BepInEx\plugins\OtherMod') | Out-Null
