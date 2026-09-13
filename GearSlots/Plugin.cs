@@ -11,40 +11,40 @@ using UnityEngine.UI;
 namespace GearSlots
 {
     /// <summary>
-    /// Ajoute des emplacements d'équipement dédiés (tête, torse, jambes, épaules, utilitaire, babiole)
-    /// affichés en panneau à droite de l'inventaire.
+    /// Adds dedicated equipment slots (head, chest, legs, shoulders, utility, trinket)
+    /// shown as a panel to the right of the inventory.
     ///
-    /// Principe : le jeu sait déjà redimensionner le sac (Player.SetInventorySize, 4 à 9 rangées, mémorisé
-    /// dans la clé de profil "invrows"). On ajoute une rangée, on la retire de la grille visible et on
-    /// repositionne ses cases dans un panneau à part. Les objets restent donc de vrais objets de l'inventaire :
-    /// aucune sérialisation maison, sauvegarde et multijoueur inchangés.
+    /// How it works: the game can already resize the bag (Player.SetInventorySize, 4 to 9 rows, remembered
+    /// in the "invrows" profile key). We add one row, remove it from the visible grid and move its slots
+    /// into a separate panel. Items therefore stay real inventory items: no custom serialization, saving and
+    /// multiplayer unchanged.
     ///
-    /// Chaque case de la rangée réservée n'accepte qu'un type d'objet, et un objet posé dans son emplacement
-    /// est automatiquement équipé (retiré de l'emplacement = déséquipé).
+    /// Each slot of the reserved row accepts only one item type, and an item placed in its slot is
+    /// automatically equipped (removed from the slot = unequipped).
     ///
-    /// Multijoueur : mod purement client, rien à installer sur le serveur. À la désinstallation le sac garde
-    /// ses 5 rangées et l'équipement réapparaît dans une rangée normale : rien n'est perdu.
+    /// Multiplayer: purely client-side mod, nothing to install on the server. When uninstalled the bag keeps
+    /// its 5 rows and the equipment shows up again in a normal row: nothing is lost.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGuid = "valheim.gearslots";
         public const string PluginName = "GearSlots";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.0.1";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;
 
         internal static ConfigEntry<bool> Enabled;
-        internal static ConfigEntry<int> RangeesSac;
-        internal static ConfigEntry<bool> EquipementAuto;
-        internal static ConfigEntry<bool> RangementAuto;
-        internal static ConfigEntry<bool> AfficherLibelles;
-        internal static ConfigEntry<bool> AfficherFond;
-        internal static ConfigEntry<string> CouleurFond;
-        internal static ConfigEntry<float> DecalageX;
-        internal static ConfigEntry<float> DecalageY;
-        internal static ConfigEntry<float> EcartColonnes;
+        internal static ConfigEntry<int> BagRows;
+        internal static ConfigEntry<bool> AutoEquip;
+        internal static ConfigEntry<bool> AutoSlot;
+        internal static ConfigEntry<bool> ShowLabels;
+        internal static ConfigEntry<bool> ShowBackground;
+        internal static ConfigEntry<string> BackgroundColor;
+        internal static ConfigEntry<float> OffsetX;
+        internal static ConfigEntry<float> OffsetY;
+        internal static ConfigEntry<float> ColumnSpacing;
 
         private Harmony _harmony;
 
@@ -53,52 +53,76 @@ namespace GearSlots
             Log = Logger;
             Instance = this;
 
-            // Fichier généré : BepInEx/config/valheim.gearslots.cfg
+            // Generated file: BepInEx/config/valheim.gearslots.cfg
             Enabled = Config.Bind("General", "Enabled", true,
-                "Active ou désactive le mod. Changement pris en compte au redémarrage du jeu.");
+                "Enables or disables the mod. Takes effect after restarting the game.");
 
-            RangeesSac = Config.Bind("General", "RangeesSac", 4,
+            BagRows = Config.Bind("General", "BagRows", 4,
                 new ConfigDescription(
-                    "Nombre de rangées du sac lui-même, hors emplacements d'équipement. 4 = taille vanilla. " +
-                    "La rangée d'équipement s'ajoute par-dessus (4 -> inventaire interne de 5 rangées). " +
-                    "Attention : réduire cette valeur fait tomber au sol les objets des rangées supprimées.",
+                    "Number of rows of the bag itself, excluding the equipment slots. 4 = vanilla size. " +
+                    "The equipment row is added on top (4 -> internal inventory of 5 rows). " +
+                    "Warning: lowering this value drops the items of the removed rows on the ground.",
                     new AcceptableValueRange<int>(1, 8)));
+            MigrateKey(BagRows, "General", "RangeesSac");
 
-            EquipementAuto = Config.Bind("General", "EquipementAuto", true,
-                "Un objet posé dans son emplacement est équipé automatiquement, et le retirer le déséquipe.");
+            AutoEquip = Config.Bind("General", "AutoEquip", true,
+                "An item placed in its slot is equipped automatically, and removing it unequips it.");
+            MigrateKey(AutoEquip, "General", "EquipementAuto");
 
-            RangementAuto = Config.Bind("General", "RangementAuto", true,
-                "Équiper une pièce depuis le sac la range automatiquement dans son emplacement dédié.");
+            AutoSlot = Config.Bind("General", "AutoSlot", true,
+                "Equipping a piece from the bag automatically moves it into its dedicated slot.");
+            MigrateKey(AutoSlot, "General", "RangementAuto");
 
-            AfficherLibelles = Config.Bind("Affichage", "AfficherLibelles", true,
-                "Affiche le nom de chaque emplacement au-dessus de sa case.");
+            ShowLabels = Config.Bind("Display", "ShowLabels", true,
+                "Shows the name of each slot above it.");
+            MigrateKey(ShowLabels, "Affichage", "AfficherLibelles");
 
-            AfficherFond = Config.Bind("Affichage", "AfficherFond", true,
-                "Affiche un fond plein derrière le panneau d'équipement.");
+            ShowBackground = Config.Bind("Display", "ShowBackground", true,
+                "Shows a solid background behind the equipment panel.");
+            MigrateKey(ShowBackground, "Affichage", "AfficherFond");
 
-            CouleurFond = Config.Bind("Affichage", "CouleurFond", "2A1F16FA",
-                "Couleur du fond, en hexadécimal RRGGBB ou RRGGBBAA (AA = opacité, FF = opaque). " +
-                "Par défaut un brun sombre proche du bois de l'inventaire.");
+            BackgroundColor = Config.Bind("Display", "BackgroundColor", "2A1F16FA",
+                "Background color, in hexadecimal RRGGBB or RRGGBBAA (AA = opacity, FF = opaque). " +
+                "Defaults to a dark brown close to the inventory's wood.");
+            MigrateKey(BackgroundColor, "Affichage", "CouleurFond");
 
-            DecalageX = Config.Bind("Affichage", "DecalageX", 130f,
+            OffsetX = Config.Bind("Display", "OffsetX", 130f,
                 new ConfigDescription(
-                    "Décalage horizontal du panneau, en pixels, depuis le bord droit du panneau d'inventaire.",
+                    "Horizontal offset of the panel, in pixels, from the right edge of the inventory panel.",
                     new AcceptableValueRange<float>(-600f, 600f)));
+            MigrateKey(OffsetX, "Affichage", "DecalageX");
 
-            DecalageY = Config.Bind("Affichage", "DecalageY", 0f,
-                new ConfigDescription("Décalage vertical du panneau, en pixels.",
+            OffsetY = Config.Bind("Display", "OffsetY", 0f,
+                new ConfigDescription("Vertical offset of the panel, in pixels.",
                     new AcceptableValueRange<float>(-600f, 600f)));
+            MigrateKey(OffsetY, "Affichage", "DecalageY");
 
-            EcartColonnes = Config.Bind("Affichage", "EcartColonnes", 14f,
-                new ConfigDescription("Espace horizontal entre les deux colonnes d'emplacements, en pixels.",
+            ColumnSpacing = Config.Bind("Display", "ColumnSpacing", 14f,
+                new ConfigDescription("Horizontal space between the two slot columns, in pixels.",
                     new AcceptableValueRange<float>(0f, 200f)));
+            MigrateKey(ColumnSpacing, "Affichage", "EcartColonnes");
 
             Config.SettingChanged += OnSettingChanged;
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(Plugin).Assembly);
 
-            Log.LogInfo($"{PluginName} {PluginVersion} chargé.");
+            Log.LogInfo($"{PluginName} {PluginVersion} loaded.");
+        }
+
+        /// <summary>
+        /// Keeps the value of a config key renamed when the mod was translated to English: if the old key is still in the
+        /// .cfg (BepInEx keeps unbound keys as orphans), its value moves to the new entry and the old line is dropped.
+        /// </summary>
+        private void MigrateKey(ConfigEntryBase entry, string oldSection, string oldKey)
+        {
+            var old = new ConfigDefinition(oldSection, oldKey);
+            if (!Config.OrphanedEntries.TryGetValue(old, out string value)) return;
+
+            entry.SetSerializedValue(value);
+            Config.OrphanedEntries.Remove(old);
+            Config.Save();
+            Log.LogInfo($"Config key [{oldSection}] {oldKey} migrated to [{entry.Definition.Section}] {entry.Definition.Key}.");
         }
 
         private void OnDestroy()
@@ -108,25 +132,25 @@ namespace GearSlots
             _harmony?.UnpatchSelf();
         }
 
-        /// <summary>Le nombre de rangées demandé change : on redimensionne l'inventaire à chaud.</summary>
+        /// <summary>The requested number of rows changed: the inventory is resized on the fly.</summary>
         private void OnSettingChanged(object sender, SettingChangedEventArgs e)
         {
-            if (e.ChangedSetting != RangeesSac) return;
+            if (e.ChangedSetting != BagRows) return;
             GearPanel.ApplyInventorySize(Player.m_localPlayer);
         }
 
         /// <summary>
-        /// Synchronisation équipement / emplacements. Passe par l'Update du plugin plutôt que par un patch
-        /// de Player.Update : même fréquence, aucun patch sur une méthode très chaude du jeu.
+        /// Equipment / slots synchronization. Runs from the plugin's Update rather than from a patch
+        /// on Player.Update: same frequency, no patch on a very hot game method.
         /// </summary>
         private void Update()
         {
-            if (!Enabled.Value || !EquipementAuto.Value) return;
+            if (!Enabled.Value || !AutoEquip.Value) return;
             GearPanel.SyncEquipment(Player.m_localPlayer);
         }
     }
 
-    /// <summary>Définition d'un emplacement : sa case dans la rangée réservée et sa place dans le panneau.</summary>
+    /// <summary>Definition of a slot: its cell in the reserved row and its place in the panel.</summary>
     internal sealed class SlotDef
     {
         public readonly int GridX;
@@ -145,10 +169,10 @@ namespace GearSlots
         }
     }
 
-    /// <summary>Table des emplacements, mise en page du panneau et synchronisation avec l'équipement porté.</summary>
+    /// <summary>Slot table, panel layout and synchronization with the worn equipment.</summary>
     internal static class GearPanel
     {
-        /// <summary>Nombre de rangées de l'inventaire réservées aux emplacements. Une seule suffit (6 cases sur 8).</summary>
+        /// <summary>Number of inventory rows reserved for the slots. One is enough (6 cells out of 8).</summary>
         internal const int ReservedRows = 1;
 
         private const string RootName = "GearSlots_Panel";
@@ -158,33 +182,33 @@ namespace GearSlots
         private const float RowGap = 8f;
 
         /// <summary>
-        /// Position de chaque emplacement. GridX est la colonne dans la rangée réservée de l'inventaire,
-        /// Column/Row la position visuelle dans le panneau (deux colonnes, comme sur la capture de référence).
+        /// Position of each slot. GridX is the column in the inventory's reserved row,
+        /// Column/Row the visual position in the panel (two columns, as in the reference screenshot).
         /// </summary>
         internal static readonly SlotDef[] Slots =
         {
-            new SlotDef(0, "Tête",       0, 0, ItemDrop.ItemData.ItemType.Helmet),
-            new SlotDef(1, "Torse",      0, 1, ItemDrop.ItemData.ItemType.Chest),
-            new SlotDef(2, "Jambes",     0, 2, ItemDrop.ItemData.ItemType.Legs),
-            new SlotDef(3, "Épaules",    1, 0, ItemDrop.ItemData.ItemType.Shoulder),
-            new SlotDef(4, "Utilitaire", 1, 1, ItemDrop.ItemData.ItemType.Utility),
-            new SlotDef(5, "Babiole",    1, 2, ItemDrop.ItemData.ItemType.Trinket),
+            new SlotDef(0, "Head",      0, 0, ItemDrop.ItemData.ItemType.Helmet),
+            new SlotDef(1, "Chest",     0, 1, ItemDrop.ItemData.ItemType.Chest),
+            new SlotDef(2, "Legs",      0, 2, ItemDrop.ItemData.ItemType.Legs),
+            new SlotDef(3, "Shoulders", 1, 0, ItemDrop.ItemData.ItemType.Shoulder),
+            new SlotDef(4, "Utility",   1, 1, ItemDrop.ItemData.ItemType.Utility),
+            new SlotDef(5, "Trinket",   1, 2, ItemDrop.ItemData.ItemType.Trinket),
         };
 
         private static RectTransform _root;
         private static Image _background;
 
-        /// <summary>Parent d'origine des cases, pour les rendre à la grille si le panneau disparaît.</summary>
+        /// <summary>Original parent of the cells, to give them back to the grid if the panel goes away.</summary>
         private static RectTransform _gridRoot;
 
         private static readonly Color DefaultBackground = new Color(0.165f, 0.122f, 0.086f, 0.98f);
         private static string _colorText;
         private static Color _color = DefaultBackground;
 
-        /// <summary>Couleur de fond configurée, relue seulement quand le texte de la config change.</summary>
+        /// <summary>Configured background color, parsed again only when the config text changes.</summary>
         private static Color BackgroundColor()
         {
-            string raw = Plugin.CouleurFond.Value;
+            string raw = Plugin.BackgroundColor.Value;
             if (raw == _colorText) return _color;
 
             _colorText = raw;
@@ -192,18 +216,18 @@ namespace GearSlots
             if (!ColorUtility.TryParseHtmlString(html, out _color))
             {
                 _color = DefaultBackground;
-                Plugin.Log.LogWarning($"CouleurFond invalide : \"{raw}\". Format attendu RRGGBB ou RRGGBBAA.");
+                Plugin.Log.LogWarning($"Invalid BackgroundColor: \"{raw}\". Expected format RRGGBB or RRGGBBAA.");
             }
             return _color;
         }
 
-        /// <summary>Dernier objet vu dans chaque emplacement, pour n'agir que sur les changements.</summary>
+        /// <summary>Last item seen in each slot, so that only changes are acted upon.</summary>
         private static readonly ItemDrop.ItemData[] _lastInSlot = new ItemDrop.ItemData[Slots.Length];
 
-        /// <summary>Garde-fou : équiper/déséquiper déclenche nos propres patchs, on ne veut pas de récursion.</summary>
+        /// <summary>Safeguard: equipping/unequipping triggers our own patches, we do not want recursion.</summary>
         private static bool _busy;
 
-        // ---------------------------------------------------------------- outils
+        // ---------------------------------------------------------------- helpers
 
         internal static bool IsPlayerInventory(Inventory inventory)
         {
@@ -211,7 +235,7 @@ namespace GearSlots
             return player != null && ReferenceEquals(inventory, player.m_inventory);
         }
 
-        /// <summary>Index de la rangée réservée, ou -1 si l'inventaire est trop petit.</summary>
+        /// <summary>Index of the reserved row, or -1 if the inventory is too small.</summary>
         internal static int ReservedRow(Inventory inventory)
         {
             int row = inventory.GetHeight() - ReservedRows;
@@ -239,7 +263,7 @@ namespace GearSlots
             return null;
         }
 
-        /// <summary>L'emplacement de la colonne gridX accepte-t-il cet objet ?</summary>
+        /// <summary>Does the slot of column gridX accept this item?</summary>
         internal static bool Accepts(int gridX, ItemDrop.ItemData item)
         {
             SlotDef slot = FindSlot(gridX);
@@ -251,7 +275,7 @@ namespace GearSlots
             return false;
         }
 
-        /// <summary>Première case libre du sac, hors rangée réservée.</summary>
+        /// <summary>First free cell of the bag, outside the reserved row.</summary>
         internal static bool TryFindBagSlot(Inventory inventory, out Vector2i pos)
         {
             int rows = inventory.GetHeight() - ReservedRows;
@@ -270,7 +294,7 @@ namespace GearSlots
             return false;
         }
 
-        /// <summary>Cases libres du sac seul, rangée d'équipement exclue.</summary>
+        /// <summary>Free cells of the bag alone, equipment row excluded.</summary>
         internal static int CountBagEmptySlots(Inventory inventory)
         {
             int rows = inventory.GetHeight() - ReservedRows;
@@ -282,19 +306,19 @@ namespace GearSlots
             return rows * inventory.GetWidth() - used;
         }
 
-        // ---------------------------------------------------------------- taille de l'inventaire
+        // ---------------------------------------------------------------- inventory size
 
-        /// <summary>Porte l'inventaire du joueur à RangeesSac + rangée réservée, puis nettoie la rangée réservée.</summary>
+        /// <summary>Sets the player's inventory to BagRows + reserved row, then cleans up the reserved row.</summary>
         internal static void ApplyInventorySize(Player player)
         {
             if (player == null || !Plugin.Enabled.Value) return;
 
-            int target = Mathf.Clamp(Plugin.RangeesSac.Value + ReservedRows, 2, 9);
+            int target = Mathf.Clamp(Plugin.BagRows.Value + ReservedRows, 2, 9);
             if (player.m_inventory.GetHeight() != target)
             {
-                // SetInventorySize met aussi à jour le panneau et mémorise la taille dans le profil.
+                // SetInventorySize also updates the panel and remembers the size in the profile.
                 player.SetInventorySize(target);
-                Plugin.Log.LogInfo($"Inventaire porté à {target} rangées ({Plugin.RangeesSac.Value} de sac + {ReservedRows} d'équipement).");
+                Plugin.Log.LogInfo($"Inventory set to {target} rows ({Plugin.BagRows.Value} bag + {ReservedRows} equipment).");
             }
             else if (InventoryGui.instance != null)
             {
@@ -307,12 +331,12 @@ namespace GearSlots
         }
 
         /// <summary>
-        /// Range dans leur emplacement les pièces déjà portées. Sans ça, un personnage existant garderait
-        /// son armure dans le sac jusqu'à ce qu'il la rééquipe à la main.
+        /// Moves the pieces already worn into their slot. Without this, an existing character would keep
+        /// their armor in the bag until they re-equip it by hand.
         /// </summary>
         internal static void TidyEquipped(Player player)
         {
-            if (!Plugin.RangementAuto.Value) return;
+            if (!Plugin.AutoSlot.Value) return;
             foreach (ItemDrop.ItemData item in player.m_inventory.GetEquippedItems())
             {
                 MoveToSlot(player, item);
@@ -320,8 +344,8 @@ namespace GearSlots
         }
 
         /// <summary>
-        /// Sort de la rangée réservée tout objet qui n'a rien à y faire : cases sans emplacement défini
-        /// (colonnes 6 et 7) ou objet du mauvais type, hérité d'une ancienne config ou d'une partie vanilla.
+        /// Moves out of the reserved row any item that does not belong there: cells without a defined slot
+        /// (columns 6 and 7) or an item of the wrong type, left over from an old config or a vanilla game.
         /// </summary>
         internal static void SweepReservedRow(Player player)
         {
@@ -337,25 +361,25 @@ namespace GearSlots
                 if (TryFindBagSlot(inventory, out Vector2i free))
                 {
                     item.m_gridPos = free;
-                    Plugin.Log.LogInfo($"\"{item.m_shared.m_name}\" déplacé hors de la rangée d'équipement.");
+                    Plugin.Log.LogInfo($"\"{item.m_shared.m_name}\" moved out of the equipment row.");
                 }
                 else
                 {
                     player.DropItem(inventory, item, item.m_stack);
-                    Plugin.Log.LogWarning($"Sac plein : \"{item.m_shared.m_name}\" lâché au sol depuis la rangée d'équipement.");
+                    Plugin.Log.LogWarning($"Bag full: \"{item.m_shared.m_name}\" dropped on the ground from the equipment row.");
                 }
             }
             inventory.m_onChanged?.Invoke();
         }
 
-        // ---------------------------------------------------------------- équipement
+        // ---------------------------------------------------------------- equipment
 
         internal static void ResetCache()
         {
             for (int i = 0; i < _lastInSlot.Length; i++) _lastInSlot[i] = null;
         }
 
-        /// <summary>Équipe ce qui vient d'arriver dans un emplacement, déséquipe ce qui vient d'en sortir.</summary>
+        /// <summary>Equips what just arrived in a slot, unequips what just left one.</summary>
         internal static void SyncEquipment(Player player)
         {
             if (_busy || player == null || player.IsDead() || player.IsTeleporting()) return;
@@ -390,7 +414,7 @@ namespace GearSlots
             }
         }
 
-        /// <summary>Range une pièce fraîchement équipée dans son emplacement, en échangeant avec l'occupant.</summary>
+        /// <summary>Moves a freshly equipped piece into its slot, swapping with the occupant.</summary>
         internal static void MoveToSlot(Player player, ItemDrop.ItemData item)
         {
             if (_busy || player == null || item == null || player.IsDead()) return;
@@ -411,7 +435,7 @@ namespace GearSlots
                 ItemDrop.ItemData occupant = inventory.GetItemAt(slot.GridX, row);
                 if (occupant != null)
                 {
-                    // L'ancienne position de l'objet ne convient que si elle est hors rangée réservée.
+                    // The item's old position is only suitable if it is outside the reserved row.
                     Vector2i destination = item.m_gridPos;
                     if (destination.y == row && !TryFindBagSlot(inventory, out destination)) return;
 
@@ -428,7 +452,7 @@ namespace GearSlots
             }
         }
 
-        /// <summary>Sort du panneau une pièce qu'on vient de déséquiper, pour qu'un emplacement occupé soit toujours porté.</summary>
+        /// <summary>Moves a just-unequipped piece out of the panel, so that an occupied slot is always worn.</summary>
         internal static void MoveOutOfSlot(Player player, ItemDrop.ItemData item)
         {
             if (_busy || player == null || item == null || player.IsDead()) return;
@@ -456,11 +480,11 @@ namespace GearSlots
             }
         }
 
-        // ---------------------------------------------------------------- panneau
+        // ---------------------------------------------------------------- panel
 
         /// <summary>
-        /// Détruit le panneau sans emporter les cases : ce sont les InventoryElement vivants de la grille,
-        /// que le jeu continue de référencer dans InventoryGrid.m_elements.
+        /// Destroys the panel without taking the cells with it: they are the grid's live InventoryElements,
+        /// which the game keeps referencing in InventoryGrid.m_elements.
         /// </summary>
         internal static void Destroy()
         {
@@ -479,9 +503,9 @@ namespace GearSlots
         }
 
         /// <summary>
-        /// Déplace les cases de la rangée réservée dans un panneau à droite de l'inventaire, et masque les
-        /// colonnes sans emplacement. Les InventoryElement gardent leur position logique : le drag & drop,
-        /// les tooltips et le liseré « équipé » continuent de fonctionner tels quels.
+        /// Moves the cells of the reserved row into a panel to the right of the inventory, and hides the
+        /// columns without a slot. The InventoryElements keep their logical position: drag and drop,
+        /// tooltips and the "equipped" border keep working as is.
         /// </summary>
         internal static void LayoutPanel(InventoryGrid grid, Inventory inventory)
         {
@@ -496,7 +520,7 @@ namespace GearSlots
             if (gui == null || gui.m_player == null) return;
 
             float space = grid.m_elementSpace;
-            float gap = Plugin.EcartColonnes.Value;
+            float gap = Plugin.ColumnSpacing.Value;
             float pitch = LabelBand + space + RowGap;
 
             int columns = 1, rows = 1;
@@ -511,10 +535,10 @@ namespace GearSlots
             _root.sizeDelta = new Vector2(
                 Padding * 2f + columns * space + (columns - 1) * gap,
                 Padding * 2f + rows * pitch - RowGap);
-            _root.anchoredPosition = new Vector2(Plugin.DecalageX.Value, Plugin.DecalageY.Value);
+            _root.anchoredPosition = new Vector2(Plugin.OffsetX.Value, Plugin.OffsetY.Value);
             if (_background != null)
             {
-                _background.enabled = Plugin.AfficherFond.Value;
+                _background.enabled = Plugin.ShowBackground.Value;
                 _background.color = BackgroundColor();
             }
 
@@ -525,7 +549,7 @@ namespace GearSlots
 
                 if (slot == null)
                 {
-                    // Colonnes sans emplacement : masquées, et SweepReservedRow garantit qu'elles restent vides.
+                    // Columns without a slot: hidden, and SweepReservedRow guarantees they stay empty.
                     if (element.gameObject.activeSelf) element.gameObject.SetActive(false);
                     continue;
                 }
@@ -548,7 +572,7 @@ namespace GearSlots
                 UpdateLabel(element, slot, space);
             }
 
-            // La grille ne doit occuper que les rangées du sac : on annule l'agrandissement fait par UpdateGui.
+            // The grid must only span the bag rows: undo the enlargement made by UpdateGui.
             grid.m_gridRoot.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, row * space);
         }
 
@@ -572,8 +596,8 @@ namespace GearSlots
         }
 
         /// <summary>
-        /// Libellé au-dessus de la case. On clone l'objet "binding" (le numéro de raccourci de la barre rapide)
-        /// pour hériter de la police et du style du jeu sans embarquer d'asset.
+        /// Label above the cell. We clone the "binding" object (the hotbar shortcut number)
+        /// to inherit the game's font and style without shipping any asset.
         /// </summary>
         private static void UpdateLabel(InventoryElement element, SlotDef slot, float space)
         {
@@ -605,13 +629,13 @@ namespace GearSlots
             }
 
             TMP_Text label = existing.GetComponent<TMP_Text>();
-            if (label != null) label.enabled = Plugin.AfficherLibelles.Value;
+            if (label != null) label.enabled = Plugin.ShowLabels.Value;
         }
     }
 
-    // ================================================================== patchs
+    // ================================================================== patches
 
-    /// <summary>Au spawn, le jeu applique la taille mémorisée dans le profil : on impose la nôtre juste après.</summary>
+    /// <summary>On spawn, the game applies the size remembered in the profile: we enforce ours right after.</summary>
     [HarmonyPatch(typeof(Player), nameof(Player.OnSpawned))]
     internal static class Player_OnSpawned_Patch
     {
@@ -623,7 +647,7 @@ namespace GearSlots
         }
     }
 
-    /// <summary>Le panneau d'inventaire ne doit pas s'agrandir pour la rangée réservée.</summary>
+    /// <summary>The inventory panel must not grow for the reserved row.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.SetInventorySize))]
     internal static class InventoryGui_SetInventorySize_Patch
     {
@@ -636,7 +660,7 @@ namespace GearSlots
         }
     }
 
-    /// <summary>Après chaque rafraîchissement de la grille du joueur, on replace les cases du panneau.</summary>
+    /// <summary>After each refresh of the player's grid, the panel cells are repositioned.</summary>
     [HarmonyPatch(typeof(InventoryGrid), nameof(InventoryGrid.UpdateInventory))]
     internal static class InventoryGrid_UpdateInventory_Patch
     {
@@ -652,12 +676,12 @@ namespace GearSlots
             }
             catch (Exception e)
             {
-                Plugin.Log.LogError($"Mise en page du panneau d'équipement impossible : {e}");
+                Plugin.Log.LogError($"Could not lay out the equipment panel: {e}");
             }
         }
     }
 
-    /// <summary>Un emplacement n'accepte que son type d'objet : on bloque le dépôt sinon.</summary>
+    /// <summary>A slot only accepts its item type: dropping anything else is blocked.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.OnSelectedItem))]
     internal static class InventoryGui_OnSelectedItem_Patch
     {
@@ -674,12 +698,12 @@ namespace GearSlots
 
             SlotDef slot = GearPanel.FindSlot(pos.x);
             Player.m_localPlayer.Message(MessageHud.MessageType.Center,
-                slot != null ? $"Emplacement réservé : {slot.Label}" : "Emplacement inutilisé");
+                slot != null ? $"Reserved slot: {slot.Label}" : "Unused slot");
             return false;
         }
     }
 
-    /// <summary>Le remplissage automatique du sac (ramassage, transfert depuis un coffre) ignore la rangée réservée.</summary>
+    /// <summary>Automatic bag filling (pickup, transfer from a chest) skips the reserved row.</summary>
     [HarmonyPatch(typeof(Inventory), nameof(Inventory.FindEmptySlot))]
     internal static class Inventory_FindEmptySlot_Patch
     {
@@ -724,7 +748,7 @@ namespace GearSlots
         }
     }
 
-    /// <summary>Les cases d'équipement ne comptent pas comme de la place libre dans le sac.</summary>
+    /// <summary>Equipment cells do not count as free space in the bag.</summary>
     [HarmonyPatch(typeof(Inventory), nameof(Inventory.GetEmptySlots))]
     internal static class Inventory_GetEmptySlots_Patch
     {
@@ -736,7 +760,7 @@ namespace GearSlots
         }
     }
 
-    /// <summary>Idem pour le test « reste-t-il une case libre ? ».</summary>
+    /// <summary>Same for the "is there a free cell left?" check.</summary>
     [HarmonyPatch(typeof(Inventory), nameof(Inventory.HaveEmptySlot))]
     internal static class Inventory_HaveEmptySlot_Patch
     {
@@ -748,25 +772,25 @@ namespace GearSlots
         }
     }
 
-    /// <summary>Une pièce équipée depuis le sac rejoint son emplacement dédié.</summary>
+    /// <summary>A piece equipped from the bag goes to its dedicated slot.</summary>
     [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.EquipItem))]
     internal static class Humanoid_EquipItem_Patch
     {
         private static void Postfix(Humanoid __instance, ItemDrop.ItemData item, bool __result)
         {
-            if (!__result || !Plugin.Enabled.Value || !Plugin.RangementAuto.Value) return;
+            if (!__result || !Plugin.Enabled.Value || !Plugin.AutoSlot.Value) return;
             if (!(__instance is Player player) || player != Player.m_localPlayer) return;
             GearPanel.MoveToSlot(player, item);
         }
     }
 
-    /// <summary>Une pièce déséquipée quitte son emplacement : un emplacement occupé est toujours porté.</summary>
+    /// <summary>An unequipped piece leaves its slot: an occupied slot is always worn.</summary>
     [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.UnequipItem))]
     internal static class Humanoid_UnequipItem_Patch
     {
         private static void Postfix(Humanoid __instance, ItemDrop.ItemData item)
         {
-            if (!Plugin.Enabled.Value || !Plugin.EquipementAuto.Value) return;
+            if (!Plugin.Enabled.Value || !Plugin.AutoEquip.Value) return;
             if (!(__instance is Player player) || player != Player.m_localPlayer) return;
             GearPanel.MoveOutOfSlot(player, item);
         }

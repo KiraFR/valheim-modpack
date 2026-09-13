@@ -8,135 +8,157 @@ using UnityEngine;
 namespace ChestStack
 {
     /// <summary>
-    /// Ranger tout le sac dans les coffres alentour en un appui.
+    /// Stores the whole bag into the surrounding chests with a single key press.
     ///
-    /// - Le jeu possède déjà la mécanique : Inventory.StackAll ne déplace un objet que si la destination
-    ///   en contient déjà un exemplaire. Le mod ne réinvente rien, il appelle Container.StackAll() sur
-    ///   chaque coffre à portée au lieu du seul coffre ouvert.
-    /// - Container.StackAll() passe par un aller-retour RPC qui demande la propriété du ZDO, refuse si un
-    ///   autre joueur fouille le coffre et vérifie l'accès des coffres privés. C'est pour cette sécurité
-    ///   qu'on emprunte ce chemin plutôt que d'appeler Inventory.StackAll en direct, comme le fait le
-    ///   bouton « Empiler tout » du jeu. Bonus : RPC_StackResponse joue déjà l'effet visuel de dépôt sur
-    ///   chaque coffre qui a reçu quelque chose, donc le retour à l'écran est gratuit.
-    /// - Conséquence : le rangement n'a pas lieu pendant l'appui mais plus tard, dans RPC_StackResponse.
-    ///   Le mod attend les réponses (au plus DelaiReponse secondes) avant d'afficher son récapitulatif, et
-    ///   étouffe entre-temps les messages que chaque coffre veut afficher pour son propre compte.
-    /// - Trois façons de déclencher, toutes menant au même rangement groupé. La touche du mod, qui n'exige
-    ///   rien d'ouvert. Le bouton « Objets similaires » de l'écran des coffres. Et le maintien de la touche
-    ///   d'interaction sur un coffre, qui en vanilla range déjà puis referme. Dans les deux derniers cas le
-    ///   coffre que le joueur a sous les yeux n'a aucune priorité : il devient un candidat parmi les autres,
-    ///   et un objet file chez le voisin si c'est le voisin qui en détient déjà. EtendreControlesJeu rend
-    ///   leur comportement vanilla aux deux contrôles du jeu.
+    /// - The game already has the mechanism: Inventory.StackAll only moves an item if the destination
+    ///   already holds one of the same kind. The mod reinvents nothing, it calls Container.StackAll() on
+    ///   every chest in range instead of the single open chest.
+    /// - Container.StackAll() goes through an RPC round trip that requests ownership of the ZDO, refuses if
+    ///   another player is browsing the chest and checks access to private chests. It is for that safety
+    ///   that this path is taken rather than calling Inventory.StackAll directly, as the game's "Place
+    ///   stacks" button does. Bonus: RPC_StackResponse already plays the deposit visual effect on every
+    ///   chest that received something, so the on-screen feedback comes for free.
+    /// - Consequence: storing does not happen during the key press but later, in RPC_StackResponse.
+    ///   The mod waits for the responses (at most ResponseDelay seconds) before showing its summary, and
+    ///   meanwhile suppresses the messages each chest wants to show on its own behalf.
+    /// - Three ways to trigger, all leading to the same grouped store. The mod's key, which requires
+    ///   nothing to be open. The "Place stacks" button of the chest screen. And holding the interact key
+    ///   on a chest, which in vanilla already stores then closes. In the last two cases the chest the
+    ///   player is looking at has no priority: it becomes one candidate among the others, and an item goes
+    ///   to the neighbour if the neighbour is the one already holding some. ExtendGameControls restores
+    ///   the vanilla behaviour of both game controls.
     ///
-    /// Protections : l'équipement porté est déjà épargné par StackAll lui-même, qui teste IsItemEquiped.
-    /// La barre d'action et tout ce qui nourrit s'y ajoutent par un Postfix sur ce même IsItemEquiped, qui
-    /// répond « équipé » pour ces objets. C'est le seul test par objet que StackAll consulte, donc le filtre
-    /// est exact à la pile près, sans réécrire StackAll ni toucher à la lecture de l'inventaire.
-    /// « Ce qui nourrit » reprend la définition du jeu (m_food, m_foodStamina, m_foodEitr), celle qui décide
-    /// d'afficher l'encart nutrition : la viande crue est un matériau sans valeur nutritive, elle part donc
-    /// bien au coffre. La fenêtre de filtrage est refermée par un Finalizer et non par un Postfix, car un
-    /// Postfix ne s'exécute pas si la méthode d'origine lève, ce qui rendrait la nourriture invisible au
-    /// reste du jeu pour toute la partie.
+    /// Protections: worn equipment is already spared by StackAll itself, which tests IsItemEquiped.
+    /// The hotbar and everything that feeds are added through a Postfix on that same IsItemEquiped, which
+    /// answers "equipped" for these items. It is the only per-item test StackAll consults, so the filter
+    /// is exact down to the stack, without rewriting StackAll or touching how the inventory is read.
+    /// "Everything that feeds" uses the game's own definition (m_food, m_foodStamina, m_foodEitr), the one
+    /// that decides whether to show the nutrition panel: raw meat is a material with no nutritional value, so
+    /// it does go to the chest. The filtering window is closed by a Finalizer and not by a Postfix, because a
+    /// Postfix does not run if the original method throws, which would make food invisible to the rest of
+    /// the game for the whole session.
     ///
-    /// Multijoueur : seul le joueur qui range a besoin du mod. Règle absolue : ne jamais modifier un coffre
-    /// dont on n'est pas encore propriétaire, car Container ne sauvegarde que chez le propriétaire et une
-    /// modification non sauvegardée est effacée au rechargement suivant. La réponse du coffre arrive souvent
-    /// avant la propriété elle-même ; le dépôt est alors reporté jusqu'à ce qu'elle arrive, et abandonné sans
-    /// rien déplacer si elle n'arrive pas (détail dans Container_RPC_StackResponse_Patch). Chaque coffre ne
-    /// recharge sa copie locale qu'une fois par seconde, donc un Load() est forcé juste avant d'écrire.
+    /// Multiplayer: only the player who stores needs the mod. Absolute rule: never modify a chest that we
+    /// do not own yet, because Container only saves on the owner's side and an unsaved modification is
+    /// erased on the next reload. The chest's response often arrives before ownership itself; the deposit
+    /// is then postponed until ownership arrives, and abandoned without moving anything if it does not
+    /// (details in Container_RPC_StackResponse_Patch). Each chest only reloads its local copy once per
+    /// second, so a Load() is forced right before writing.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGuid = "valheim.cheststack";
         public const string PluginName = "ChestStack";
-        public const string PluginVersion = "1.0.1";
+        public const string PluginVersion = "1.0.2";
 
         internal static ManualLogSource Log;
 
         internal static ConfigEntry<bool> Enabled;
-        internal static ConfigEntry<float> Rayon;
-        internal static ConfigEntry<bool> ProtegerBarreAction;
-        internal static ConfigEntry<bool> ProtegerNourriture;
-        internal static ConfigEntry<bool> EtendreControlesJeu;
-        internal static ConfigEntry<bool> ProtegerHorsDuMod;
-        internal static ConfigEntry<float> DelaiReponse;
-        internal static ConfigEntry<KeyboardShortcut> ToucheRanger;
+        internal static ConfigEntry<float> Radius;
+        internal static ConfigEntry<bool> ProtectHotbar;
+        internal static ConfigEntry<bool> ProtectFood;
+        internal static ConfigEntry<bool> ExtendGameControls;
+        internal static ConfigEntry<bool> ProtectOutsideMod;
+        internal static ConfigEntry<float> ResponseDelay;
+        internal static ConfigEntry<KeyboardShortcut> StoreKey;
 
         private Harmony _harmony;
 
-        /// <summary>Tous les conteneurs instanciés, alimenté par le patch sur Container.Awake.</summary>
+        /// <summary>Every instantiated container, fed by the patch on Container.Awake.</summary>
         private static readonly HashSet<Container> AllContainers = new HashSet<Container>();
 
-        // État du rangement en cours. Le rangement est étalé sur plusieurs frames : on lance N demandes,
-        // puis on attend N réponses ou l'expiration du délai de garde.
-        private static bool _triEnCours;
-        private static int _reponsesAttendues;
-        private static int _reponsesRecues;
-        private static int _objetsRanges;
-        private static int _coffresRemplis;
-        private static int _abandons;
-        private static float _finAttente;
+        // State of the store in progress. Storing is spread over several frames: N requests are sent,
+        // then we wait for N responses or for the guard delay to expire.
+        private static bool _storeInProgress;
+        private static int _expectedResponses;
+        private static int _receivedResponses;
+        private static int _storedItems;
+        private static int _filledChests;
+        private static int _abandoned;
+        private static float _waitDeadline;
 
         /// <summary>
-        /// Coffres qui ont accordé le rangement mais dont la propriété n'est pas encore arrivée chez nous.
-        /// Rien n'y est déplacé tant qu'ils sont ici. Voir Container_RPC_StackResponse_Patch.
+        /// Chests that granted the store but whose ownership has not reached us yet.
+        /// Nothing is moved into them while they are here. See Container_RPC_StackResponse_Patch.
         /// </summary>
-        private static readonly List<Container> EnAttenteDePropriete = new List<Container>();
+        private static readonly List<Container> AwaitingOwnership = new List<Container>();
 
-        /// <summary>Vrai pendant l'exécution d'un StackAll dont la source est le sac du joueur local.</summary>
-        private static bool _filtrageActif;
+        /// <summary>True while a StackAll whose source is the local player's bag is running.</summary>
+        private static bool _filterActive;
 
-        internal static bool TriEnCours => _triEnCours;
-        internal static bool FiltrageActif => _filtrageActif;
+        internal static bool StoreInProgress => _storeInProgress;
+        internal static bool FilterActive => _filterActive;
 
         private void Awake()
         {
             Log = Logger;
 
-            // Fichier généré : BepInEx/config/valheim.cheststack.cfg
+            // Generated file: BepInEx/config/valheim.cheststack.cfg
             Enabled = Config.Bind("General", "Enabled", true,
-                "Active ou désactive le rangement dans les coffres alentour.");
+                "Enables or disables storing into the surrounding chests.");
 
-            Rayon = Config.Bind("General", "Rayon", 20f,
+            Radius = Config.Bind("General", "Radius", 20f,
                 new ConfigDescription(
-                    "Distance maximale, en mètres, des coffres concernés par le rangement. Même valeur par " +
-                    "défaut que ChestCraft, pour que « les coffres qui comptent » désignent le même entrepôt.",
+                    "Maximum distance, in meters, of the chests involved in storing. Same default value " +
+                    "as ChestCraft, so that \"the chests that count\" refer to the same storehouse.",
                     new AcceptableValueRange<float>(2f, 100f)));
+            MigrateKey(Radius, "General", "Rayon");
 
-            ProtegerBarreAction = Config.Bind("General", "ProtegerBarreAction", true,
-                "Laisse en place la première rangée du sac, celle des touches 1 à 8. L'équipement porté est " +
-                "déjà épargné par le jeu lui-même, il n'y a rien à régler pour lui.");
+            ProtectHotbar = Config.Bind("General", "ProtectHotbar", true,
+                "Leaves the first row of the bag in place, the one bound to keys 1 to 8. Worn equipment is " +
+                "already spared by the game itself, there is nothing to configure for it.");
+            MigrateKey(ProtectHotbar, "General", "ProtegerBarreAction");
 
-            ProtegerNourriture = Config.Bind("General", "ProtegerNourriture", true,
-                "Laisse en place tout ce qui nourrit, selon la définition du jeu (santé, endurance ou eitr). " +
-                "La viande et le poisson crus sont des matériaux sans valeur nutritive : ils partent au coffre.");
+            ProtectFood = Config.Bind("General", "ProtectFood", true,
+                "Leaves in place everything that feeds, according to the game's definition (health, stamina " +
+                "or eitr). Raw meat and fish are materials with no nutritional value: they go to the chest.");
+            MigrateKey(ProtectFood, "General", "ProtegerNourriture");
 
-            EtendreControlesJeu = Config.Bind("General", "EtendreControlesJeu", true,
-                "Fait porter les contrôles du jeu sur tout le voisinage au lieu du seul coffre ouvert : le " +
-                "bouton « Objets similaires » et le maintien de la touche d'interaction rangent alors dans " +
-                "tous les coffres à portée. Sur false, ils redeviennent vanilla et seule la touche du mod range.");
+            ExtendGameControls = Config.Bind("General", "ExtendGameControls", true,
+                "Makes the game's controls act on the whole neighbourhood instead of the single open chest: " +
+                "the \"Place stacks\" button and holding the interact key then store into every chest in " +
+                "range. When false, they go back to vanilla and only the mod's key stores.");
+            MigrateKey(ExtendGameControls, "General", "EtendreControlesJeu");
 
-            ProtegerHorsDuMod = Config.Bind("General", "ProtegerHorsDuMod", true,
-                "N'a d'effet que si EtendreControlesJeu est sur false : applique quand même les protections " +
-                "ci-dessus aux contrôles du jeu restés vanilla.");
+            ProtectOutsideMod = Config.Bind("General", "ProtectOutsideMod", true,
+                "Only has an effect when ExtendGameControls is false: still applies the protections above " +
+                "to the game's controls that stayed vanilla.");
+            MigrateKey(ProtectOutsideMod, "General", "ProtegerHorsDuMod");
 
-            DelaiReponse = Config.Bind("General", "DelaiReponse", 2f,
+            ResponseDelay = Config.Bind("General", "ResponseDelay", 2f,
                 new ConfigDescription(
-                    "Temps d'attente, en secondes, avant d'afficher le récapitulatif si un coffre ne répond " +
-                    "jamais. À monter sur un serveur distant à forte latence.",
+                    "Waiting time, in seconds, before showing the summary if a chest never responds. " +
+                    "Raise it on a remote server with high latency.",
                     new AcceptableValueRange<float>(0.2f, 10f)));
+            MigrateKey(ResponseDelay, "General", "DelaiReponse");
 
-            ToucheRanger = Config.Bind("Controls", "ToucheRanger",
+            StoreKey = Config.Bind("Controls", "StoreKey",
                 new KeyboardShortcut(KeyCode.R, KeyCode.LeftShift),
-                "Touche qui range le sac dans les coffres alentour. Elle ne répond qu'en visant un coffre ou " +
-                "en ayant un coffre ouvert, ce qui évite un déclenchement en pleine course. Le modificateur " +
-                "évite aussi de croiser la touche R de ChestCraft.");
+                "Key that stores the bag into the surrounding chests. It only responds while aiming at a chest " +
+                "or with a chest open, which avoids triggering it in the middle of a run. The modifier " +
+                "also avoids clashing with ChestCraft's R key.");
+            MigrateKey(StoreKey, "Controls", "ToucheRanger");
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(Plugin).Assembly);
 
-            Log.LogInfo($"{PluginName} {PluginVersion} chargé.");
+            Log.LogInfo($"{PluginName} {PluginVersion} loaded.");
+        }
+
+        /// <summary>
+        /// Keeps the value of a config key renamed when the mod was translated to English: if the old key is still in the
+        /// .cfg (BepInEx keeps unbound keys as orphans), its value moves to the new entry and the old line is dropped.
+        /// </summary>
+        private void MigrateKey(ConfigEntryBase entry, string oldSection, string oldKey)
+        {
+            var old = new ConfigDefinition(oldSection, oldKey);
+            if (!Config.OrphanedEntries.TryGetValue(old, out string value)) return;
+
+            entry.SetSerializedValue(value);
+            Config.OrphanedEntries.Remove(old);
+            Config.Save();
+            Log.LogInfo($"Config key [{oldSection}] {oldKey} migrated to [{entry.Definition.Section}] {entry.Definition.Key}.");
         }
 
         private void OnDestroy()
@@ -148,25 +170,25 @@ namespace ChestStack
         {
             if (!Enabled.Value) return;
 
-            if (_triEnCours)
+            if (_storeInProgress)
             {
-                SuivreTri();
+                TrackStore();
                 return;
             }
 
-            if (!ToucheRanger.Value.IsDown() || !SaisieLibre()) return;
+            if (!StoreKey.Value.IsDown() || !InputFree()) return;
 
-            Container vise = CoffreVise();
-            if (vise == null) return;
+            Container targeted = TargetedChest();
+            if (targeted == null) return;
 
-            LancerTri(vise);
+            StartStore(targeted);
         }
 
         /// <summary>
-        /// Le coffre sous le réticule, ou celui dont l'écran est ouvert. Sert de garde à la touche : le geste
-        /// est « je range ici », pas « je range où que je sois », ce qui écarte l'appui accidentel en courant.
+        /// The chest under the crosshair, or the one whose screen is open. Acts as a guard for the key: the
+        /// gesture is "I store here", not "I store wherever I am", which rules out an accidental press while running.
         /// </summary>
-        private static Container CoffreVise()
+        private static Container TargetedChest()
         {
             Player player = Player.m_localPlayer;
             if (player == null) return null;
@@ -174,19 +196,19 @@ namespace ChestStack
             if (InventoryGui.instance != null && InventoryGui.instance.m_currentContainer != null)
                 return InventoryGui.instance.m_currentContainer;
 
-            GameObject survole = player.GetHoverObject();
-            return survole != null ? survole.GetComponentInParent<Container>() : null;
+            GameObject hovered = player.GetHoverObject();
+            return hovered != null ? hovered.GetComponentInParent<Container>() : null;
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Rangement
+        // Storing
         // ------------------------------------------------------------------------------------------------
 
         /// <summary>
-        /// Mêmes verrous que RowTogether, moins celui sur l'inventaire : ranger depuis un coffre ouvert est
-        /// justement le geste le plus courant, la touche doit donc y répondre.
+        /// Same locks as RowTogether, minus the one on the inventory: storing from an open chest is precisely
+        /// the most common gesture, so the key must respond there.
         /// </summary>
-        private static bool SaisieLibre()
+        private static bool InputFree()
         {
             if (Console.IsVisible() || Menu.IsVisible() || TextInput.IsVisible()) return false;
             if (Minimap.IsOpen()) return false;
@@ -195,201 +217,201 @@ namespace ChestStack
         }
 
         /// <summary>
-        /// Démarre un rangement groupé. <paramref name="origine"/> est le coffre que le joueur avait sous les
-        /// yeux quand il a déclenché, ajouté à la liste même s'il n'a rien qui corresponde : c'est un coffre
-        /// comme les autres, il n'a aucune priorité sur ses voisins.
-        /// Renvoie false si rien n'a été lancé, auquel cas l'appelant vanilla doit reprendre la main.
+        /// Starts a grouped store. <paramref name="origin"/> is the chest the player was looking at when
+        /// triggering, added to the list even if it holds nothing matching: it is a chest like the others,
+        /// with no priority over its neighbours.
+        /// Returns false if nothing was started, in which case the vanilla caller must take over.
         /// </summary>
-        internal static bool LancerTri(Container origine = null)
+        internal static bool StartStore(Container origin = null)
         {
-            if (_triEnCours) return false;
+            if (_storeInProgress) return false;
 
             Player player = Player.m_localPlayer;
             if (player == null || player.IsTeleporting()) return false;
 
-            List<Container> coffres = CoffresAPortee(player);
-            if (origine != null && origine.m_nview != null && origine.m_nview.IsValid() &&
-                origine.GetInventory() != null && !coffres.Contains(origine))
+            List<Container> chests = ChestsInRange(player);
+            if (origin != null && origin.m_nview != null && origin.m_nview.IsValid() &&
+                origin.GetInventory() != null && !chests.Contains(origin))
             {
-                coffres.Add(origine);
+                chests.Add(origin);
             }
 
-            if (coffres.Count == 0)
+            if (chests.Count == 0)
             {
-                player.Message(MessageHud.MessageType.Center, "Aucun coffre à portée");
+                player.Message(MessageHud.MessageType.Center, "No chest in range");
                 return false;
             }
 
-            _objetsRanges = 0;
-            _coffresRemplis = 0;
-            _reponsesRecues = 0;
-            _abandons = 0;
-            EnAttenteDePropriete.Clear();
-            _reponsesAttendues = coffres.Count;
-            _finAttente = Time.time + Mathf.Max(0.1f, DelaiReponse.Value);
-            _triEnCours = true;
+            _storedItems = 0;
+            _filledChests = 0;
+            _receivedResponses = 0;
+            _abandoned = 0;
+            AwaitingOwnership.Clear();
+            _expectedResponses = chests.Count;
+            _waitDeadline = Time.time + Mathf.Max(0.1f, ResponseDelay.Value);
+            _storeInProgress = true;
 
-            foreach (Container coffre in coffres) coffre.StackAll();
+            foreach (Container chest in chests) chest.StackAll();
 
-            Log.LogInfo($"Rangement demandé à {coffres.Count} coffre(s) dans un rayon de {Rayon.Value:0.#} m.");
+            Log.LogInfo($"Store requested from {chests.Count} chest(s) within a radius of {Radius.Value:0.#} m.");
             return true;
         }
 
         /// <summary>
-        /// Dépose dans les coffres dont la propriété vient d'arriver, puis conclut dès que tous les coffres ont
-        /// été traités, ou au bout du délai de garde. Un coffre encore en attente à ce moment-là est abandonné
-        /// sans que rien n'y ait été déplacé : les objets restent dans le sac, rien ne peut se perdre.
+        /// Deposits into the chests whose ownership just arrived, then concludes as soon as every chest has
+        /// been processed, or when the guard delay expires. A chest still pending at that point is abandoned
+        /// without anything having been moved into it: the items stay in the bag, nothing can be lost.
         /// </summary>
-        private static void SuivreTri()
+        private static void TrackStore()
         {
-            TraiterAttentes();
+            ProcessPending();
 
-            if (_reponsesRecues < _reponsesAttendues && Time.time < _finAttente) return;
+            if (_receivedResponses < _expectedResponses && Time.time < _waitDeadline) return;
 
-            _abandons += EnAttenteDePropriete.Count;
-            EnAttenteDePropriete.Clear();
-            _triEnCours = false;
+            _abandoned += AwaitingOwnership.Count;
+            AwaitingOwnership.Clear();
+            _storeInProgress = false;
 
-            if (_abandons > 0)
+            if (_abandoned > 0)
             {
-                Log.LogWarning($"{_abandons} coffre(s) abandonné(s) : propriété non reçue dans le délai de " +
-                               $"{DelaiReponse.Value:0.#} s, rien n'y a été déplacé.");
+                Log.LogWarning($"{_abandoned} chest(s) abandoned: ownership not received within " +
+                               $"{ResponseDelay.Value:0.#} s, nothing was moved into them.");
             }
 
-            Log.LogInfo($"Rangement terminé : {_objetsRanges} objet(s), {_coffresRemplis} coffre(s), " +
-                        $"{_reponsesRecues}/{_reponsesAttendues} traité(s), {_abandons} abandon(s).");
+            Log.LogInfo($"Store finished: {_storedItems} item(s), {_filledChests} chest(s), " +
+                        $"{_receivedResponses}/{_expectedResponses} processed, {_abandoned} abandoned.");
 
             Player player = Player.m_localPlayer;
             if (player == null) return;
 
-            string resultat = _objetsRanges > 0
-                ? $"{_objetsRanges} objet(s) rangé(s) dans {_coffresRemplis} coffre(s)"
-                : "Rien à ranger dans les coffres à portée";
-            if (_abandons > 0) resultat += $"\n{_abandons} coffre(s) injoignable(s), réessaie";
+            string result = _storedItems > 0
+                ? $"{_storedItems} item(s) stored in {_filledChests} chest(s)"
+                : "Nothing to store in the chests in range";
+            if (_abandoned > 0) result += $"\n{_abandoned} chest(s) unreachable, try again";
 
-            player.Message(MessageHud.MessageType.Center, resultat);
+            player.Message(MessageHud.MessageType.Center, result);
         }
 
-        private static void TraiterAttentes()
+        private static void ProcessPending()
         {
-            for (int i = EnAttenteDePropriete.Count - 1; i >= 0; i--)
+            for (int i = AwaitingOwnership.Count - 1; i >= 0; i--)
             {
-                Container coffre = EnAttenteDePropriete[i];
+                Container chest = AwaitingOwnership[i];
 
-                if (coffre == null || coffre.m_nview == null || !coffre.m_nview.IsValid())
+                if (chest == null || chest.m_nview == null || !chest.m_nview.IsValid())
                 {
-                    EnAttenteDePropriete.RemoveAt(i);
-                    _reponsesRecues++;
-                    _abandons++;
+                    AwaitingOwnership.RemoveAt(i);
+                    _receivedResponses++;
+                    _abandoned++;
                     continue;
                 }
 
-                if (!coffre.m_nview.IsOwner()) continue;
+                if (!chest.m_nview.IsOwner()) continue;
 
-                EnAttenteDePropriete.RemoveAt(i);
-                Deposer(coffre);
+                AwaitingOwnership.RemoveAt(i);
+                Deposit(chest);
             }
         }
 
         /// <summary>
-        /// Ce que RPC_StackResponse fait quand le rangement est accordé, rejoué une fois la propriété réellement
-        /// acquise. message doit rester à true : sur false, StackAll ne mesure plus l'écart et renvoie le
-        /// contenu total du coffre au lieu du nombre d'objets déposés, ce qui fausserait le récapitulatif.
-        /// Le message qu'il émet est de toute façon étouffé pendant le tri.
+        /// What RPC_StackResponse does when the store is granted, replayed once ownership is actually
+        /// acquired. message must stay true: when false, StackAll no longer measures the difference and returns
+        /// the chest's total content instead of the number of items deposited, which would skew the summary.
+        /// The message it emits is suppressed during the store anyway.
         /// </summary>
-        private static void Deposer(Container coffre)
+        private static void Deposit(Container chest)
         {
-            _reponsesRecues++;
+            _receivedResponses++;
 
             Player player = Player.m_localPlayer;
             if (player == null) return;
 
-            coffre.Load();
-            if (coffre.GetInventory().StackAll(player.GetInventory(), message: true) > 0 &&
+            chest.Load();
+            if (chest.GetInventory().StackAll(player.GetInventory(), message: true) > 0 &&
                 InventoryGui.instance != null)
             {
-                InventoryGui.instance.m_moveItemEffects.Create(coffre.transform.position, Quaternion.identity);
+                InventoryGui.instance.m_moveItemEffects.Create(chest.transform.position, Quaternion.identity);
             }
         }
 
         /// <summary>
-        /// Coffres retenus pour ce rangement.
+        /// Chests selected for this store.
         ///
-        /// Le test « coffre en cours d'utilisation » n'est pas refait ici : RPC_RequestStack le fait côté
-        /// propriétaire, qui seul connaît la réponse, et son refus est déjà traité comme une réponse.
+        /// The "chest in use" test is not repeated here: RPC_RequestStack does it on the owner's side, the
+        /// only one who knows the answer, and its refusal is already handled as a response.
         ///
-        /// Les deux contrôles d'accès, eux, sont bien refaits. RPC_RequestStack ne vérifie que la
-        /// confidentialité du coffre, pas le cercle protecteur : en vanilla c'est Container.Interact qui
-        /// arrête le joueur devant un coffre gardé, et ce mod ne passe pas par Interact. Sans ce filtre on
-        /// pourrait déposer dans un coffre qu'on n'a même pas le droit d'ouvrir.
+        /// Both access checks, however, are repeated. RPC_RequestStack only checks the chest's privacy, not
+        /// the ward: in vanilla it is Container.Interact that stops the player in front of a guarded chest,
+        /// and this mod does not go through Interact. Without this filter we could deposit into a chest we
+        /// are not even allowed to open.
         /// </summary>
-        private static List<Container> CoffresAPortee(Player player)
+        private static List<Container> ChestsInRange(Player player)
         {
-            var retenus = new List<Container>();
-            Vector3 centre = player.transform.position;
-            float rayonCarre = Rayon.Value * Rayon.Value;
-            long playerID = JoueurCourant();
+            var selected = new List<Container>();
+            Vector3 center = player.transform.position;
+            float radiusSquared = Radius.Value * Radius.Value;
+            long playerID = CurrentPlayerId();
 
             AllContainers.RemoveWhere(c => c == null);
 
-            foreach (Container coffre in AllContainers)
+            foreach (Container chest in AllContainers)
             {
-                if (coffre.m_nview == null || !coffre.m_nview.IsValid()) continue;
-                if (coffre.GetInventory() == null) continue;
-                if ((coffre.transform.position - centre).sqrMagnitude > rayonCarre) continue;
-                if (!AccesAutorise(coffre, playerID)) continue;
+                if (chest.m_nview == null || !chest.m_nview.IsValid()) continue;
+                if (chest.GetInventory() == null) continue;
+                if ((chest.transform.position - center).sqrMagnitude > radiusSquared) continue;
+                if (!AccessAllowed(chest, playerID)) continue;
 
-                retenus.Add(coffre);
+                selected.Add(chest);
             }
 
-            return retenus;
+            return selected;
         }
 
         /// <summary>
-        /// Les deux refus que le joueur peut se voir opposer devant un coffre : le cercle protecteur d'un
-        /// autre joueur, et la confidentialité du coffre lui-même. Sert au filtrage comme à l'affichage,
-        /// pour ne pas proposer un rangement qui serait refusé.
+        /// The two refusals the player can face in front of a chest: another player's ward, and the
+        /// privacy of the chest itself. Used for filtering as well as for display, so as not to offer a
+        /// store that would be refused.
         /// </summary>
-        internal static bool AccesAutorise(Container coffre, long playerID)
+        internal static bool AccessAllowed(Container chest, long playerID)
         {
-            if (coffre.m_checkGuardStone &&
-                !PrivateArea.CheckAccess(coffre.transform.position, 0f, false)) return false;
-            return coffre.CheckAccess(playerID);
+            if (chest.m_checkGuardStone &&
+                !PrivateArea.CheckAccess(chest.transform.position, 0f, false)) return false;
+            return chest.CheckAccess(playerID);
         }
 
-        internal static long JoueurCourant()
+        internal static long CurrentPlayerId()
         {
             return Game.instance != null ? Game.instance.GetPlayerProfile().GetPlayerID() : 0L;
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Libellé de la touche
+        // Key label
         // ------------------------------------------------------------------------------------------------
 
-        private static KeyboardShortcut _toucheCache;
-        private static string _libelleCache;
+        private static KeyboardShortcut _keyCache;
+        private static string _labelCache;
 
         /// <summary>
-        /// « Shift+R » plutôt que le « R + LeftShift » de BepInEx. Recalculé seulement quand le réglage
-        /// change, car le survol d'un coffre rappelle ce texte à chaque image.
+        /// "Shift+R" rather than BepInEx's "R + LeftShift". Only recomputed when the setting changes,
+        /// because hovering a chest requests this text every frame.
         /// </summary>
-        internal static string LibelleToucheRanger()
+        internal static string StoreKeyLabel()
         {
-            KeyboardShortcut actuelle = ToucheRanger.Value;
-            if (_libelleCache != null && actuelle.Equals(_toucheCache)) return _libelleCache;
+            KeyboardShortcut current = StoreKey.Value;
+            if (_labelCache != null && current.Equals(_keyCache)) return _labelCache;
 
-            string libelle = "";
-            foreach (KeyCode modificateur in actuelle.Modifiers) libelle += NomTouche(modificateur) + "+";
-            libelle += NomTouche(actuelle.MainKey);
+            string label = "";
+            foreach (KeyCode modifier in current.Modifiers) label += KeyName(modifier) + "+";
+            label += KeyName(current.MainKey);
 
-            _toucheCache = actuelle;
-            _libelleCache = libelle;
-            return _libelleCache;
+            _keyCache = current;
+            _labelCache = label;
+            return _labelCache;
         }
 
-        private static string NomTouche(KeyCode touche)
+        private static string KeyName(KeyCode key)
         {
-            switch (touche)
+            switch (key)
             {
                 case KeyCode.LeftShift:
                 case KeyCode.RightShift: return "Shift";
@@ -397,97 +419,97 @@ namespace ChestStack
                 case KeyCode.RightControl: return "Ctrl";
                 case KeyCode.LeftAlt:
                 case KeyCode.RightAlt: return "Alt";
-                default: return touche.ToString();
+                default: return key.ToString();
             }
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Points d'accroche des patches
+        // Patch hooks
         // ------------------------------------------------------------------------------------------------
 
-        internal static void Register(Container coffre)
+        internal static void Register(Container chest)
         {
-            if (coffre != null) AllContainers.Add(coffre);
+            if (chest != null) AllContainers.Add(chest);
         }
 
-        internal static void CompterReponse()
+        internal static void CountResponse()
         {
-            if (_triEnCours) _reponsesRecues++;
+            if (_storeInProgress) _receivedResponses++;
         }
 
-        internal static void MettreEnAttente(Container coffre)
+        internal static void AwaitOwnership(Container chest)
         {
-            if (!EnAttenteDePropriete.Contains(coffre)) EnAttenteDePropriete.Add(coffre);
+            if (!AwaitingOwnership.Contains(chest)) AwaitingOwnership.Add(chest);
         }
 
-        internal static void EnregistrerResultat(int objets)
+        internal static void RecordResult(int items)
         {
-            if (!_triEnCours || objets <= 0) return;
-            _objetsRanges += objets;
-            _coffresRemplis++;
+            if (!_storeInProgress || items <= 0) return;
+            _storedItems += items;
+            _filledChests++;
         }
 
         /// <summary>
-        /// Ouvre la fenêtre de filtrage si la source est bien le sac du joueur local. Hors d'un rangement
-        /// déclenché par le mod, ProtegerHorsDuMod décide si les contrôles du jeu en bénéficient aussi.
-        /// Renvoie l'état à restituer au Finalizer.
+        /// Opens the filtering window if the source really is the local player's bag. Outside a store
+        /// triggered by the mod, ProtectOutsideMod decides whether the game's controls benefit from it too.
+        /// Returns the state to hand back to the Finalizer.
         /// </summary>
-        internal static bool OuvrirFiltrage(Inventory source)
+        internal static bool OpenFilter(Inventory source)
         {
             if (!Enabled.Value) return false;
 
             Player player = Player.m_localPlayer;
             if (player == null || source != player.GetInventory()) return false;
-            if (!_triEnCours && !ProtegerHorsDuMod.Value) return false;
+            if (!_storeInProgress && !ProtectOutsideMod.Value) return false;
 
-            _filtrageActif = true;
+            _filterActive = true;
             return true;
         }
 
-        internal static void FermerFiltrage()
+        internal static void CloseFilter()
         {
-            _filtrageActif = false;
+            _filterActive = false;
         }
 
         /// <summary>
-        /// Ce que le rangement automatique ne doit pas emporter. L'équipement porté n'y figure pas :
-        /// StackAll le teste déjà de son côté.
+        /// What automatic storing must not take away. Worn equipment is not listed here:
+        /// StackAll already tests it on its own side.
         /// </summary>
-        internal static bool EstProtege(ItemDrop.ItemData item)
+        internal static bool IsProtected(ItemDrop.ItemData item)
         {
             if (item == null) return false;
-            if (ProtegerBarreAction.Value && item.m_gridPos.y == 0) return true;
-            if (ProtegerNourriture.Value && EstComestible(item)) return true;
+            if (ProtectHotbar.Value && item.m_gridPos.y == 0) return true;
+            if (ProtectFood.Value && IsEdible(item)) return true;
             return false;
         }
 
         /// <summary>
-        /// Définition du jeu lui-même, celle qui décide d'afficher l'encart nutrition dans l'infobulle.
-        /// La viande crue est un matériau sans valeur nutritive : elle n'est donc pas protégée.
+        /// The game's own definition, the one that decides whether to show the nutrition panel in the tooltip.
+        /// Raw meat is a material with no nutritional value: it is therefore not protected.
         /// </summary>
-        private static bool EstComestible(ItemDrop.ItemData item)
+        private static bool IsEdible(ItemDrop.ItemData item)
         {
-            ItemDrop.ItemData.SharedData partage = item.m_shared;
-            if (partage == null) return false;
-            return partage.m_food > 0f || partage.m_foodStamina > 0f || partage.m_foodEitr > 0f;
+            ItemDrop.ItemData.SharedData shared = item.m_shared;
+            if (shared == null) return false;
+            return shared.m_food > 0f || shared.m_foodStamina > 0f || shared.m_foodEitr > 0f;
         }
 
         /// <summary>
-        /// Chaque coffre veut annoncer son propre résultat au centre de l'écran. Sur quinze coffres ce serait
-        /// quinze messages empilés ; le mod n'en garde qu'un, le sien, affiché une fois le tri conclu.
+        /// Each chest wants to announce its own result in the center of the screen. With fifteen chests that
+        /// would be fifteen stacked messages; the mod keeps only one, its own, shown once the store concludes.
         /// </summary>
-        internal static bool DoitEtouffer(string msg)
+        internal static bool ShouldSuppress(string msg)
         {
-            if (!_triEnCours || msg == null) return false;
+            if (!_storeInProgress || msg == null) return false;
             return msg.StartsWith("$msg_stackall", System.StringComparison.Ordinal) || msg == "$msg_inuse";
         }
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Enregistrement des coffres
+    // Chest registration
     // ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Chaque conteneur instancié s'inscrit lui-même : aucune requête physique à faire ensuite.</summary>
+    /// <summary>Every instantiated container registers itself: no physics query needed afterwards.</summary>
     [HarmonyPatch(typeof(Container), nameof(Container.Awake))]
     internal static class Container_Awake_Patch
     {
@@ -498,30 +520,30 @@ namespace ChestStack
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Fenêtre de filtrage et comptage
+    // Filtering window and counting
     // ----------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Le seul endroit où le sac du joueur se vide vers un coffre. On l'encadre pour activer les protections
-    /// et pour relever combien d'objets sont effectivement partis.
+    /// The only place where the player's bag empties into a chest. It is wrapped to enable the protections
+    /// and to record how many items actually left.
     /// </summary>
     [HarmonyPatch(typeof(Inventory), nameof(Inventory.StackAll))]
     internal static class Inventory_StackAll_Patch
     {
         private static void Prefix(Inventory fromInventory, out bool __state)
         {
-            __state = Plugin.OuvrirFiltrage(fromInventory);
+            __state = Plugin.OpenFilter(fromInventory);
         }
 
         private static void Postfix(int __result)
         {
-            Plugin.EnregistrerResultat(__result);
+            Plugin.RecordResult(__result);
         }
 
-        /// <summary>Finalizer et non Postfix : une exception ne doit pas laisser le filtre ouvert pour la partie.</summary>
+        /// <summary>Finalizer and not Postfix: an exception must not leave the filter open for the session.</summary>
         private static void Finalizer(bool __state)
         {
-            if (__state) Plugin.FermerFiltrage();
+            if (__state) Plugin.CloseFilter();
         }
     }
 
@@ -530,76 +552,76 @@ namespace ChestStack
     // ----------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// StackAll consulte IsItemEquiped objet par objet pour décider de ne pas le déplacer. Répondre
-    /// « équipé » pour la barre d'action et la nourriture suffit à les épargner, sans réécrire StackAll.
+    /// StackAll consults IsItemEquiped item by item to decide not to move it. Answering
+    /// "equipped" for the hotbar and food is enough to spare them, without rewriting StackAll.
     /// </summary>
     [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.IsItemEquiped))]
     internal static class Humanoid_IsItemEquiped_Patch
     {
         private static void Postfix(Humanoid __instance, ItemDrop.ItemData item, ref bool __result)
         {
-            if (__result || !Plugin.FiltrageActif) return;
+            if (__result || !Plugin.FilterActive) return;
             if (__instance != Player.m_localPlayer) return;
-            if (Plugin.EstProtege(item)) __result = true;
+            if (Plugin.IsProtected(item)) __result = true;
         }
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Réponses des coffres
+    // Chest responses
     // ----------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Chaque coffre répond ici, et c'est ici que la version 1.0.0 perdait des objets.
+    /// Every chest responds here, and this is where version 1.0.0 lost items.
     ///
-    /// Dans RPC_RequestStack, le propriétaire du coffre fait trois choses dans cet ordre : ForceSendZDO,
-    /// SetOwner, puis l'envoi de cette réponse. Or ForceSendZDO ne fait que mettre le ZDO en file : il ne
-    /// part qu'au prochain passage de ZDOMan.SendZDOToPeers2, toutes les 0,05 s, alors que la réponse part
-    /// immédiatement sur le socket. Quand le coffre appartient au serveur ou à un autre joueur, la réponse
-    /// arrive donc avant le ZDO qui nous désigne propriétaire. StackAll retirait alors les objets du sac et
-    /// les ajoutait à la copie locale du coffre, mais Container.OnContainerChanged refusait de sauvegarder
-    /// puisque IsOwner() était encore faux. Au rechargement suivant la copie locale était écrasée par le ZDO,
-    /// et les objets avaient disparu des deux côtés. Si au contraire le joueur retouchait le coffre une fois
-    /// propriétaire, la copie locale était sauvegardée et les objets réapparaissaient : d'où le « des fois ».
+    /// In RPC_RequestStack, the chest's owner does three things in this order: ForceSendZDO,
+    /// SetOwner, then sends this response. But ForceSendZDO only queues the ZDO: it is only sent on the
+    /// next pass of ZDOMan.SendZDOToPeers2, every 0.05 s, whereas the response goes out immediately on the
+    /// socket. When the chest belongs to the server or to another player, the response therefore arrives
+    /// before the ZDO that makes us the owner. StackAll then removed the items from the bag and added them
+    /// to the chest's local copy, but Container.OnContainerChanged refused to save since IsOwner() was still
+    /// false. On the next reload the local copy was overwritten by the ZDO, and the items had vanished on
+    /// both sides. If instead the player touched the chest again once owner, the local copy was saved and
+    /// the items reappeared: hence the "sometimes".
     ///
-    /// Le jeu n'y est pas exposé, car son maintien de touche ne range que dans un coffre déjà ouvert, donc
-    /// déjà possédé. Le mod range tout de suite dans des voisins jamais ouverts. Un joueur déjà propriétaire
-    /// des coffres autour de lui ne voit jamais le problème, ce qui explique qu'il ne touche qu'un joueur.
+    /// The game is not exposed to this, because its held key only stores into an already open chest, hence
+    /// already owned. The mod immediately stores into neighbours never opened. A player who already owns
+    /// the chests around them never sees the problem, which explains why it only affects one player.
     ///
-    /// Correctif : tant que la propriété n'est pas là, la réponse d'origine est sautée et le coffre mis en
-    /// attente. SuivreTri rejoue le dépôt dès que IsOwner() devient vrai, ou l'abandonne au délai de garde.
+    /// Fix: as long as ownership is not there, the original response is skipped and the chest is put on
+    /// hold. TrackStore replays the deposit as soon as IsOwner() becomes true, or abandons it at the guard delay.
     /// </summary>
     [HarmonyPatch(typeof(Container), nameof(Container.RPC_StackResponse))]
     internal static class Container_RPC_StackResponse_Patch
     {
         private static bool Prefix(Container __instance, bool granted)
         {
-            if (!Plugin.TriEnCours) return true;
+            if (!Plugin.StoreInProgress) return true;
 
             if (!granted || __instance.m_nview == null || !__instance.m_nview.IsValid())
             {
-                Plugin.CompterReponse();
+                Plugin.CountResponse();
                 return true;
             }
 
             if (!__instance.m_nview.IsOwner())
             {
-                Plugin.MettreEnAttente(__instance);
+                Plugin.AwaitOwnership(__instance);
                 return false;
             }
 
-            Plugin.CompterReponse();
+            Plugin.CountResponse();
             __instance.Load();
             return true;
         }
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Affichage au survol
+    // Hover display
     // ----------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Annonce la touche sous les deux lignes du jeu, dans la même forme qu'elles. Rien n'est affiché si le
-    /// coffre refuserait le rangement, pour ne pas promettre un geste qui échouerait.
+    /// Shows the key below the game's two lines, in the same form as them. Nothing is shown if the
+    /// chest would refuse the store, so as not to promise a gesture that would fail.
     /// </summary>
     [HarmonyPatch(typeof(Container), nameof(Container.GetHoverText))]
     internal static class Container_GetHoverText_Patch
@@ -607,50 +629,50 @@ namespace ChestStack
         private static void Postfix(Container __instance, ref string __result)
         {
             if (!Plugin.Enabled.Value || string.IsNullOrEmpty(__result)) return;
-            if (!Plugin.AccesAutorise(__instance, Plugin.JoueurCourant())) return;
+            if (!Plugin.AccessAllowed(__instance, Plugin.CurrentPlayerId())) return;
 
-            __result += $"\n[<color=yellow><b>{Plugin.LibelleToucheRanger()}</b></color>] " +
-                        "Ranger dans les coffres alentour";
+            __result += $"\n[<color=yellow><b>{Plugin.StoreKeyLabel()}</b></color>] " +
+                        "Store in nearby chests";
         }
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Élargissement des contrôles du jeu
+    // Extending the game's controls
     // ----------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Point de passage du maintien de la touche d'interaction sur un coffre ouvert. On y détourne le
-    /// rangement vers tout le voisinage, le coffre visé n'étant plus qu'un candidat parmi les autres.
-    /// Le mod s'appelle lui-même ici pour chaque coffre : TriEnCours laisse alors filer l'appel d'origine,
-    /// sans quoi le détournement se rappellerait sans fin.
+    /// Entry point of holding the interact key on an open chest. The store is redirected here to the whole
+    /// neighbourhood, the targeted chest being only one candidate among the others.
+    /// The mod calls this itself for every chest: StoreInProgress then lets the original call through,
+    /// otherwise the redirection would call itself endlessly.
     /// </summary>
     [HarmonyPatch(typeof(Container), nameof(Container.StackAll))]
     internal static class Container_StackAll_Patch
     {
         private static bool Prefix(Container __instance)
         {
-            if (!Plugin.Enabled.Value || !Plugin.EtendreControlesJeu.Value) return true;
-            if (Plugin.TriEnCours) return true;
-            return !Plugin.LancerTri(__instance);
+            if (!Plugin.Enabled.Value || !Plugin.ExtendGameControls.Value) return true;
+            if (Plugin.StoreInProgress) return true;
+            return !Plugin.StartStore(__instance);
         }
     }
 
     /// <summary>
-    /// Le bouton « Objets similaires » de l'écran des coffres. Il n'appelle pas Container.StackAll mais
-    /// Inventory.StackAll en direct, sans demander la propriété du ZDO : il lui faut donc son propre
-    /// détournement, qui au passage lui fait emprunter le chemin réseau plus sûr.
+    /// The "Place stacks" button of the chest screen. It does not call Container.StackAll but
+    /// Inventory.StackAll directly, without requesting ownership of the ZDO: it therefore needs its own
+    /// redirection, which along the way makes it take the safer network path.
     /// </summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.OnStackAll))]
     internal static class InventoryGui_OnStackAll_Patch
     {
         private static bool Prefix(InventoryGui __instance)
         {
-            if (!Plugin.Enabled.Value || !Plugin.EtendreControlesJeu.Value) return true;
+            if (!Plugin.Enabled.Value || !Plugin.ExtendGameControls.Value) return true;
             if (__instance.m_currentContainer == null) return true;
             if (Player.m_localPlayer == null || Player.m_localPlayer.IsTeleporting()) return true;
 
             __instance.SetupDragItem(null, null, 1);
-            return !Plugin.LancerTri(__instance.m_currentContainer);
+            return !Plugin.StartStore(__instance.m_currentContainer);
         }
     }
 
@@ -658,13 +680,13 @@ namespace ChestStack
     // Messages
     // ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Étouffe les annonces individuelles des coffres pendant un rangement groupé.</summary>
+    /// <summary>Suppresses the chests' individual announcements during a grouped store.</summary>
     [HarmonyPatch(typeof(Player), nameof(Player.Message))]
     internal static class Player_Message_Patch
     {
         private static bool Prefix(string msg)
         {
-            return !Plugin.DoitEtouffer(msg);
+            return !Plugin.ShouldSuppress(msg);
         }
     }
 }

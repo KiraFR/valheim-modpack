@@ -3,18 +3,18 @@
   <PropertyGroup>
     <AssemblyName>StackMax</AssemblyName>
     <RootNamespace>StackMax</RootNamespace>
-    <Version>1.1.0</Version>
-    <Description>Stack max configurable par type d'objet et par objet.</Description>
+    <Version>1.1.1</Version>
+    <Description>Configurable max stack per item type and per item.</Description>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Rend publics les membres privés des assemblies du jeu (Publicize="true") -->
+    <!-- Makes private members of the referenced assemblies public (Publicize="true") -->
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- BepInEx + Harmony, pris directement dans l'installation du jeu -->
-    <Reference Include="BepInEx">
+    <!-- BepInEx + Harmony, taken straight from the game install. BepInEx is publicized for ConfigFile.OrphanedEntries (config key migration) -->
+    <Reference Include="BepInEx" Publicize="true">
       <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
       <Private>false</Private>
     </Reference>
@@ -23,7 +23,7 @@
       <Private>false</Private>
     </Reference>
 
-    <!-- Assemblies du jeu -->
+    <!-- Game assemblies -->
     <Reference Include="assembly_valheim" Publicize="true">
       <HintPath>$(ValheimManaged)\assembly_valheim.dll</HintPath>
       <Private>false</Private>
@@ -43,10 +43,10 @@
     </Reference>
   </ItemGroup>
 
-  <!-- Après compilation : copie la DLL dans BepInEx/plugins/StackMax/ -->
+  <!-- After compilation: copies the DLL to BepInEx/plugins/StackMax/ -->
   <Target Name="DeployToPlugins" AfterTargets="Build" Condition="Exists('$(BepInExPlugins)')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPlugins)\$(AssemblyName)" />
-    <Message Importance="high" Text="→ Déployé dans $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
+    <Message Importance="high" Text="→ Deployed to $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
   </Target>
 
 </Project>

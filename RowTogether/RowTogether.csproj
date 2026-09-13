@@ -3,17 +3,17 @@
   <PropertyGroup>
     <AssemblyName>RowTogether</AssemblyName>
     <RootNamespace>RowTogether</RootNamespace>
-    <Version>3.0.0</Version>
-    <Description>Les passagers d'un bateau rament avec le barreur : plus il y a de monde à bord, plus le bateau avance vite à la rame.</Description>
+    <Version>3.0.1</Version>
+    <Description>A ship's passengers row along with the helmsman: the more people on board, the faster the ship goes when rowing.</Description>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Rend publics les membres privés des assemblies du jeu (Publicize="true") -->
+    <!-- Makes private members of the game assemblies public (Publicize="true") -->
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- BepInEx + Harmony, pris directement dans l'installation du jeu -->
+    <!-- BepInEx + Harmony, taken straight from the game install -->
     <Reference Include="BepInEx">
       <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
       <Private>false</Private>
@@ -23,7 +23,7 @@
       <Private>false</Private>
     </Reference>
 
-    <!-- Assemblies du jeu -->
+    <!-- Game assemblies -->
     <Reference Include="assembly_valheim" Publicize="true">
       <HintPath>$(ValheimManaged)\assembly_valheim.dll</HintPath>
       <Private>false</Private>
@@ -43,10 +43,10 @@
     </Reference>
   </ItemGroup>
 
-  <!-- Après compilation : copie la DLL dans BepInEx/plugins/RowTogether/ -->
+  <!-- After build: copies the DLL to BepInEx/plugins/RowTogether/ -->
   <Target Name="DeployToPlugins" AfterTargets="Build" Condition="Exists('$(BepInExPlugins)')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPlugins)\$(AssemblyName)" />
-    <Message Importance="high" Text="→ Déployé dans $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
+    <Message Importance="high" Text="→ Deployed to $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
   </Target>
 
 </Project>

@@ -4,8 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-BepInEx/Harmony mods for Valheim, one C# project per mod, grouped in `Valheim.Mods.sln`. Comments, config
-descriptions and in-game messages are written in French; keep that convention.
+BepInEx/Harmony mods for Valheim, one C# project per mod, grouped in `Valheim.Mods.sln`. Everything in the mods is
+written in English: comments, identifiers, config keys and descriptions, log lines and in-game messages. Older mods
+still being translated may contain French; when renaming one of their config keys, migrate the old key's value so
+existing settings are kept. Never rename persisted keys (`"Name.key".GetStableHashCode()` ZDO keys) or RPC names.
+`README.fr.md` is the French translation of `README.md` and stays in French.
 
 Git commit messages are written in English.
 
@@ -30,7 +33,7 @@ one runs alone through `irm | iex` without fetching a second file that GitHub's 
 any change to a shared function must be made in both. Each refuses the other's folder (`valheim.exe` /
 `valheim_server.exe`). Add a mod to `$ServerMods` when it acts on objects the dedicated server can own.
 The CI workflow and everything under `.github/` are written in English (comments, step names, messages).
-Both install scripts must stay compatible with Windows PowerShell 5.1 and be written in English, ASCII only (no BOM), unlike the mods' French convention: 5.1 decodes `irm` downloads and BOM-less `-File` scripts as a legacy code page, and a UTF-8 BOM turns into
+Both install scripts must stay compatible with Windows PowerShell 5.1 and be written in English, ASCII only (no BOM): 5.1 decodes `irm` downloads and BOM-less `-File` scripts as a legacy code page, and a UTF-8 BOM turns into
 garbage before `<#` that breaks parsing of the whole script.
 
 ## Commands

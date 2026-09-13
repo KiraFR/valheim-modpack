@@ -3,18 +3,19 @@
   <PropertyGroup>
     <AssemblyName>PortalMenu</AssemblyName>
     <RootNamespace>PortalMenu</RootNamespace>
-    <Version>1.0.0</Version>
-    <Description>Choix libre de la destination d'un portail : une interface liste tous les portails du monde au lieu de l'appairage un-à-un par nom.</Description>
+    <Version>1.0.1</Version>
+    <Description>Free choice of a portal's destination: a UI lists every portal in the world instead of the one-to-one pairing by name.</Description>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Rend publics les membres privés des assemblies du jeu (Publicize="true") -->
+    <!-- Makes private members of the referenced assemblies public (Publicize="true") -->
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- BepInEx + Harmony, pris directement dans l'installation du jeu -->
-    <Reference Include="BepInEx">
+    <!-- BepInEx + Harmony, taken straight from the game install -->
+    <!-- BepInEx is publicized for ConfigFile.OrphanedEntries (config key migration) -->
+    <Reference Include="BepInEx" Publicize="true">
       <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
       <Private>false</Private>
     </Reference>
@@ -23,7 +24,7 @@
       <Private>false</Private>
     </Reference>
 
-    <!-- Assemblies du jeu -->
+    <!-- Game assemblies -->
     <Reference Include="assembly_valheim" Publicize="true">
       <HintPath>$(ValheimManaged)\assembly_valheim.dll</HintPath>
       <Private>false</Private>
@@ -37,7 +38,7 @@
       <Private>false</Private>
     </Reference>
 
-    <!-- Unity + TextMeshPro (libellés du panneau) -->
+    <!-- Unity + TextMeshPro (panel labels) -->
     <Reference Include="$(ValheimManaged)\UnityEngine.dll;$(ValheimManaged)\UnityEngine.*.dll">
       <Private>false</Private>
     </Reference>
@@ -47,10 +48,10 @@
     </Reference>
   </ItemGroup>
 
-  <!-- Après compilation : copie la DLL dans BepInEx/plugins/PortalMenu/ -->
+  <!-- After build: copies the DLL to BepInEx/plugins/PortalMenu/ -->
   <Target Name="DeployToPlugins" AfterTargets="Build" Condition="Exists('$(BepInExPlugins)')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPlugins)\$(AssemblyName)" />
-    <Message Importance="high" Text="→ Déployé dans $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
+    <Message Importance="high" Text="→ Deployed to $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
   </Target>
 
 </Project>

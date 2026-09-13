@@ -3,18 +3,19 @@
   <PropertyGroup>
     <AssemblyName>ChestCraft</AssemblyName>
     <RootNamespace>ChestCraft</RootNamespace>
-    <Version>1.0.0</Version>
-    <Description>Fabrication et construction en puisant dans les coffres aux alentours.</Description>
+    <Version>1.0.1</Version>
+    <Description>Crafting and building by drawing from nearby chests.</Description>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Rend publics les membres privés des assemblies du jeu (Publicize="true") -->
+    <!-- Makes private members of the game assemblies public (Publicize="true") -->
     <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- BepInEx + Harmony, pris directement dans l'installation du jeu -->
-    <Reference Include="BepInEx">
+    <!-- BepInEx + Harmony, taken straight from the game install. BepInEx is publicized to reach
+         ConfigFile.OrphanedEntries, used to migrate the config keys renamed during the translation. -->
+    <Reference Include="BepInEx" Publicize="true">
       <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
       <Private>false</Private>
     </Reference>
@@ -23,7 +24,7 @@
       <Private>false</Private>
     </Reference>
 
-    <!-- Assemblies du jeu -->
+    <!-- Game assemblies -->
     <Reference Include="assembly_valheim" Publicize="true">
       <HintPath>$(ValheimManaged)\assembly_valheim.dll</HintPath>
       <Private>false</Private>
@@ -43,10 +44,10 @@
     </Reference>
   </ItemGroup>
 
-  <!-- Après compilation : copie la DLL dans BepInEx/plugins/ChestCraft/ -->
+  <!-- After build: copies the DLL to BepInEx/plugins/ChestCraft/ -->
   <Target Name="DeployToPlugins" AfterTargets="Build" Condition="Exists('$(BepInExPlugins)')">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPlugins)\$(AssemblyName)" />
-    <Message Importance="high" Text="→ Déployé dans $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
+    <Message Importance="high" Text="→ Deployed to $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
   </Target>
 
 </Project>

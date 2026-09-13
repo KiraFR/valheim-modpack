@@ -8,28 +8,28 @@ using UnityEngine;
 namespace RowTogether
 {
     /// <summary>
-    /// Les passagers assis d'un bateau rament avec le barreur.
+    /// Seated passengers of a ship row along with the helmsman.
     ///
-    /// - Aucune touche, aucun état à synchroniser : un passager compte comme rameur dès qu'il est
-    ///   assis (emote « s'asseoir », ou n'importe quelle animation taguée « sitting »).
-    /// - L'effet ne joue que quand le barreur rame (Ship.Speed.Slow ou Back) ; à la voile, rien.
-    /// - Chaque rameur ajoute son bonus à la poussée : l'effet est incrémental, sans notion de côté.
-    /// - Le barreur (à la barre) ne rame pas, il EST la poussée de base (multiplicateur x1).
-    /// - LimitToSailSpeed plafonne la rame à la vitesse voile du bateau (voir MaxMultiplier).
+    /// - No key, no state to synchronise: a passenger counts as a rower as soon as they are
+    ///   seated (the "sit" emote, or any animation tagged "sitting").
+    /// - The effect only applies while the helmsman rows (Ship.Speed.Slow or Back); under sail, nothing.
+    /// - Each rower adds their bonus to the thrust: the effect is incremental, with no notion of side.
+    /// - The helmsman (at the helm) does not row, they ARE the base thrust (x1 multiplier).
+    /// - LimitToSailSpeed caps rowing at the ship's sailing speed (see MaxMultiplier).
     ///
-    /// La physique n'est calculée que par le propriétaire réseau du bateau. Ce n'est PAS forcément
-    /// le barreur : Ship.UpdateOwner transfère la propriété à n'importe quel joueur à bord dès que
-    /// le propriétaire courant n'y est plus. Le mod doit donc être installé chez tous les joueurs
-    /// susceptibles de monter à bord ; il est inutile sur un serveur dédié, qui ne possède un objet
-    /// que quand aucun joueur n'est à proximité. L'animateur des joueurs distants est répliqué par
-    /// ZSyncAnimation, donc IsSitting() est fiable sur leurs répliques locales.
+    /// Physics is only computed by the ship's network owner. That is NOT necessarily the
+    /// helmsman: Ship.UpdateOwner hands ownership to any player on board as soon as the
+    /// current owner is no longer there. The mod must therefore be installed by every player
+    /// likely to board; it is useless on a dedicated server, which only owns an object when
+    /// no player is nearby. The animator of remote players is replicated by
+    /// ZSyncAnimation, so IsSitting() is reliable on their local replicas.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGuid = "valheim.rowtogether";
         public const string PluginName = "RowTogether";
-        public const string PluginVersion = "3.0.0";
+        public const string PluginVersion = "3.0.1";
 
         internal static ManualLogSource Log;
         internal static ConfigEntry<bool> Enabled;
@@ -46,31 +46,31 @@ namespace RowTogether
         {
             Log = Logger;
 
-            Enabled = Config.Bind("General", "Enabled", true, "Active ou désactive le mod.");
+            Enabled = Config.Bind("General", "Enabled", true, "Enables or disables the mod.");
 
             BonusPerRower = Config.Bind("Rowing", "BonusPerRower", 0.5f,
                 new ConfigDescription(
-                    "Bonus de poussée à la rame par passager assis. Chaque rameur ajoute ce bonus à la poussée " +
-                    "de base, le côté du bateau n'a aucune importance. 0.5 = 1 rameur x1.5, 2 rameurs x2, 4 rameurs x3. " +
-                    "Le barreur ne compte pas : c'est lui la poussée de base (x1).",
+                    "Rowing thrust bonus per seated passenger. Each rower adds this bonus to the base thrust, " +
+                    "the side of the ship does not matter. 0.5 = 1 rower x1.5, 2 rowers x2, 4 rowers x3. " +
+                    "The helmsman does not count: they are the base thrust (x1).",
                     new AcceptableValueRange<float>(0f, 5f)));
 
             MaxRowers = Config.Bind("Rowing", "MaxRowers", 0,
-                new ConfigDescription("Nombre maximum de rameurs pris en compte (0 = illimité).",
+                new ConfigDescription("Maximum number of rowers taken into account (0 = unlimited).",
                     new AcceptableValueRange<int>(0, 20)));
 
             LimitToSailSpeed = Config.Bind("Rowing", "LimitToSailSpeed", true,
-                "Empêche la rame de dépasser la vitesse que CE bateau atteindrait à la voile au meilleur vent. " +
-                "Le plafond est calculé par bateau (un radeau reste lent, un drakkar reste rapide), donc ajouter " +
-                "des rameurs au-delà ne sert plus à rien. Mettre à false pour n'avoir aucune limite.");
+                "Prevents rowing from exceeding the speed THIS ship would reach under sail with the best wind. " +
+                "The cap is computed per ship (a raft stays slow, a longship stays fast), so adding " +
+                "rowers beyond it no longer helps. Set to false for no limit at all.");
 
             ShowMessages = Config.Bind("Feedback", "ShowMessages", true,
-                "Affiche des messages à l'écran (nombre de rameurs pour le barreur, prise de rame pour les passagers).");
+                "Shows on-screen messages (number of rowers for the helmsman, starting to row for passengers).");
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(Plugin).Assembly);
 
-            Log.LogInfo($"{PluginName} {PluginVersion} chargé.");
+            Log.LogInfo($"{PluginName} {PluginVersion} loaded.");
         }
 
         private void OnDestroy()
@@ -78,7 +78,7 @@ namespace RowTogether
             _harmony?.UnpatchSelf();
         }
 
-        /// <summary>Retour visuel uniquement : la mécanique vit dans Ship_CustomFixedUpdate_Patch.</summary>
+        /// <summary>Visual feedback only: the mechanics live in Ship_CustomFixedUpdate_Patch.</summary>
         private void Update()
         {
             if (!Enabled.Value || !ShowMessages.Value) return;
@@ -95,7 +95,7 @@ namespace RowTogether
 
             bool helmsRowing = IsRowingSpeed(ship);
 
-            // Barreur : nombre de rameurs actifs, quand il change.
+            // Helmsman: number of active rowers, when it changes.
             if (IsHelmsman(ship, local))
             {
                 int rowers = helmsRowing ? Analyze(ship).Rowers : 0;
@@ -108,26 +108,26 @@ namespace RowTogether
                 return;
             }
 
-            // Passager : prévenir quand il commence / arrête de contribuer.
+            // Passenger: notify when they start / stop contributing.
             _lastRowers = -1;
             bool rowing = helmsRowing && IsRower(ship, local);
             if (rowing != _wasRowing)
             {
                 _wasRowing = rowing;
-                Msg(local, rowing ? "Vous ramez. " + Describe(Analyze(ship)) : "Vous arrêtez de ramer.");
+                Msg(local, rowing ? "You are rowing. " + Describe(Analyze(ship)) : "You stop rowing.");
             }
         }
 
-        /// <summary>"2 rameurs : rame x2" — le libellé partagé par le barreur et les rameurs.</summary>
+        /// <summary>"2 rowers: row x2" — the label shared by the helmsman and the rowers.</summary>
         private static string Describe(Crew crew)
         {
             string plural = crew.Rowers > 1 ? "s" : "";
-            string txt = $"{crew.Rowers} rameur{plural} : rame x{crew.Multiplier:0.0#}";
-            if (crew.Capped) txt += " (plafonné à la vitesse voile)";
+            string txt = $"{crew.Rowers} rower{plural}: row x{crew.Multiplier:0.0#}";
+            if (crew.Capped) txt += " (capped at sailing speed)";
             return txt;
         }
 
-        // ----- Équipage -----
+        // ----- Crew -----
 
         internal static bool IsRowingSpeed(Ship ship)
         {
@@ -141,8 +141,8 @@ namespace RowTogether
         }
 
         /// <summary>
-        /// Un passager rame s'il est assis et n'est pas à la barre. IsSitting() compare l'état courant
-        /// de l'animateur au tag « sitting », et cet animateur est répliqué sur tous les clients.
+        /// A passenger rows if they are seated and not at the helm. IsSitting() compares the animator's
+        /// current state to the "sitting" tag, and that animator is replicated on every client.
         /// </summary>
         internal static bool IsRower(Ship ship, Player p)
         {
@@ -155,7 +155,7 @@ namespace RowTogether
         {
             public int Rowers;
             public float Multiplier;
-            /// <summary>Vrai si LimitToSailSpeed a rogné le multiplicateur.</summary>
+            /// <summary>True if LimitToSailSpeed trimmed the multiplier.</summary>
             public bool Capped;
         }
 
@@ -183,31 +183,31 @@ namespace RowTogether
             return crew;
         }
 
-        // ----- Plafond « vitesse voile » -----
+        // ----- "Sailing speed" cap -----
 
         /// <summary>
-        /// Facteur de poussée avant maximal de la voile, tous vents confondus, en fraction de
-        /// m_sailForceFactor. Ship.GetWindAngleFactor vaut 0.7 vent arrière et 1.0 vent de travers,
-        /// mais le vent de travers perd en projection sur l'axe du bateau : le maximum réel est à
-        /// ~65° du cap, soit ~0.737. Le portant pur n'est pas l'optimum dans Valheim.
+        /// Maximum forward thrust factor of the sail, over all wind directions, as a fraction of
+        /// m_sailForceFactor. Ship.GetWindAngleFactor is 0.7 with a tailwind and 1.0 with a crosswind,
+        /// but the crosswind loses in projection onto the ship's axis: the real maximum is at
+        /// ~65° from the heading, i.e. ~0.737. A pure downwind run is not the optimum in Valheim.
         /// </summary>
         private const float BestSailForwardFactor = 0.737f;
 
         /// <summary>
-        /// Multiplicateur au-delà duquel la rame irait plus vite que la voile.
+        /// Multiplier beyond which rowing would go faster than sailing.
         ///
-        /// Voile et rame poussent le bateau dans la même boucle physique et subissent la même
-        /// traînée quadratique (m_dampingForward). À accélération par pas de physique égale, la
-        /// vitesse d'équilibre est donc égale : il suffit d'égaliser les accélérations, sans avoir
-        /// à modéliser la traînée. Voile : BestSailForwardFactor * m_sailForceFactor par pas.
-        /// Rame : m_backwardForce * fixedDeltaTime par pas.
+        /// Sail and oars push the ship in the same physics loop and suffer the same
+        /// quadratic drag (m_dampingForward). With equal acceleration per physics step, the
+        /// equilibrium speed is therefore equal: equalising the accelerations is enough, without
+        /// having to model the drag. Sail: BestSailForwardFactor * m_sailForceFactor per step.
+        /// Oars: m_backwardForce * fixedDeltaTime per step.
         ///
-        /// Les valeurs viennent du prefab du bateau, donc le plafond s'adapte à chaque coque.
-        /// Jamais en dessous de 1 : le mod ne doit pas rendre la rame plus lente que le vanilla.
+        /// The values come from the ship's prefab, so the cap adapts to each hull.
+        /// Never below 1: the mod must not make rowing slower than vanilla.
         ///
-        /// Coques sans voile (m_sailForceFactor = 0, cas du Trailership) : la comparaison n'a
-        /// aucun sens, le plafond les ramènerait à x1 et annulerait le mod. On ne les plafonne pas,
-        /// seuls BonusPerRower et MaxRowers les gouvernent.
+        /// Hulls without a sail (m_sailForceFactor = 0, the Trailership's case): the comparison is
+        /// meaningless, the cap would bring them back to x1 and cancel the mod. They are not capped,
+        /// only BonusPerRower and MaxRowers govern them.
         /// </summary>
         internal static float MaxMultiplier(Ship ship)
         {
@@ -219,7 +219,7 @@ namespace RowTogether
             return Mathf.Max(1f, BestSailForwardFactor * ship.m_sailForceFactor / rowAccel);
         }
 
-        // ----- Utilitaires -----
+        // ----- Utilities -----
 
         private static void Msg(Player p, string text)
         {
@@ -229,9 +229,9 @@ namespace RowTogether
     }
 
     /// <summary>
-    /// Au chargement du monde : liste dans le log le plafond de rame calculé pour chaque coque du jeu.
-    /// Les valeurs m_backwardForce et m_sailForceFactor vivent dans les prefabs Unity, donc invisibles
-    /// hors exécution : ce récapitulatif permet de vérifier les plafonds sans partir en mer.
+    /// On world load: lists in the log the rowing cap computed for every hull in the game.
+    /// The m_backwardForce and m_sailForceFactor values live in the Unity prefabs, so they are invisible
+    /// outside runtime: this summary makes it possible to check the caps without going to sea.
     /// </summary>
     [HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Awake))]
     internal static class ZNetScene_Awake_Patch
@@ -248,19 +248,19 @@ namespace RowTogether
 
                 float max = Plugin.MaxMultiplier(ship);
                 string cap = float.IsInfinity(max) || max >= float.MaxValue
-                    ? "sans voile, non plafonné"
-                    : $"rame max x{max:0.00}";
+                    ? "no sail, uncapped"
+                    : $"max rowing x{max:0.00}";
 
                 Plugin.Log.LogInfo(
-                    $"Bateau {prefab.name} : {cap} " +
+                    $"Ship {prefab.name}: {cap} " +
                     $"(m_backwardForce {ship.m_backwardForce}, m_sailForceFactor {ship.m_sailForceFactor})");
             }
         }
     }
 
     /// <summary>
-    /// Autour de la mise à jour physique du bateau : on gonfle m_backwardForce pendant l'appel,
-    /// puis on restaure la valeur d'origine. Ne s'applique que quand le barreur rame.
+    /// Around the ship's physics update: m_backwardForce is inflated during the call,
+    /// then the original value is restored. Only applies while the helmsman rows.
     /// </summary>
     [HarmonyPatch(typeof(Ship), nameof(Ship.CustomFixedUpdate))]
     internal static class Ship_CustomFixedUpdate_Patch
@@ -271,7 +271,7 @@ namespace RowTogether
 
             if (!Plugin.Enabled.Value) return;
             if (!Plugin.IsRowingSpeed(__instance)) return;
-            if (__instance.m_nview != null && !__instance.m_nview.IsOwner()) return; // seul le propriétaire calcule la physique
+            if (__instance.m_nview != null && !__instance.m_nview.IsOwner()) return; // only the owner computes physics
 
             __instance.m_backwardForce = __state * Plugin.Analyze(__instance).Multiplier;
         }

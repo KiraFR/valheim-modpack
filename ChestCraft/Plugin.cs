@@ -12,85 +12,85 @@ using UnityEngine;
 namespace ChestCraft
 {
     /// <summary>
-    /// Fabriquer, améliorer et construire en puisant directement dans les coffres aux alentours.
+    /// Craft, upgrade and build by drawing directly from nearby chests.
     ///
-    /// - Les matériaux des coffres proches comptent comme s'ils étaient dans le sac : le panneau
-    ///   d'artisanat affiche le total, le bouton Fabriquer s'active, et le craft retire ce qui manque
-    ///   dans les coffres.
-    /// - Idem pour le marteau (construction) et pour les appareils (fondoir, four à charbon, moulin, rouet,
-    ///   raffinerie d'eitr, fermenteur, feux, balistes), chacun désactivable séparément. Les grils et les
-    ///   fours à pain sont hors jeu par défaut : leur ingrédient serait imprévisible. La touche de choix
-    ///   permet de les réactiver un par un, ou General.Cuisson d'un coup.
-    /// - Le jeu ne centralise pas la lecture de l'inventaire : tous les chemins finissent sur des méthodes
-    ///   feuilles de Inventory (CountItems, HaveItem, GetAmmoItem, et les quatre RemoveItem). Ce sont
-    ///   celles-là qui sont patchées, et seulement pendant une "portée" ouverte par les points d'entrée
-    ///   du craft, de la construction et des appareils. Hors de cette portée les patches ne font rien.
-    /// - La portée est refermée par un Finalizer Harmony et non par un Postfix : un Postfix ne s'exécute
-    ///   pas si la méthode d'origine lève, ce qui laisserait la portée ouverte pour le reste de la partie.
-    /// - Les appareils désignent leur objet par référence, pas par nom. Trois patches redirigent le retrait
-    ///   vers le coffre qui détient l'objet ; sans eux l'objet serait consommé sans quitter le coffre.
-    /// - Les coffres chargés s'enregistrent eux-mêmes via un patch sur Container.Awake ; le mod ne fait
-    ///   aucune requête physique, il filtre cette liste par distance toutes les 0,25 s.
+    /// - Materials in nearby chests count as if they were in the backpack: the crafting panel shows the
+    ///   total, the Craft button becomes enabled, and crafting takes whatever is missing from the
+    ///   chests.
+    /// - Same for the hammer (building) and for stations (smelter, charcoal kiln, windmill, spinning wheel,
+    ///   eitr refinery, fermenter, fires, ballistas), each one can be disabled separately. Cooking stations
+    ///   and ovens are left out by default: the ingredient they would take is unpredictable. The choice key
+    ///   re-enables them one by one, or General.Cooking all at once.
+    /// - The game does not centralise inventory reads: every path ends up on leaf methods of Inventory
+    ///   (CountItems, HaveItem, GetAmmoItem, and the four RemoveItem). Those are the ones patched, and only
+    ///   during a "scope" opened by the entry points of crafting, building and stations. Outside that
+    ///   scope the patches do nothing.
+    /// - The scope is closed by a Harmony Finalizer and not by a Postfix: a Postfix does not run if the
+    ///   original method throws, which would leave the scope open for the rest of the session.
+    /// - Stations designate their item by reference, not by name. Three patches redirect the removal to
+    ///   the chest that holds the item; without them the item would be consumed without leaving the chest.
+    /// - Loaded chests register themselves through a patch on Container.Awake; the mod makes no physics
+    ///   query, it filters that list by distance every 0.25 s.
     ///
-    /// Multijoueur : un coffre est un ZDO, écrire dedans sans en être propriétaire serait perdu. Avant
-    /// chaque retrait le mod prend la propriété (ClaimOwnership) puis force la sauvegarde (Container.Save).
-    /// Les coffres ouverts par un autre joueur sont ignorés par défaut pour éviter les retraits croisés.
-    /// Seul le joueur qui fabrique a besoin du mod ; le serveur et les autres clients n'en ont pas besoin.
+    /// Multiplayer: a chest is a ZDO, writing to it without owning it would be lost. Before each removal
+    /// the mod takes ownership (ClaimOwnership) then forces a save (Container.Save).
+    /// Chests opened by another player are ignored by default to avoid concurrent removals.
+    /// Only the crafting player needs the mod; the server and the other clients do not.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGuid = "valheim.chestcraft";
         public const string PluginName = "ChestCraft";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.0.1";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;
 
         internal static ConfigEntry<bool> Enabled;
-        internal static ConfigEntry<float> Rayon;
-        internal static ConfigEntry<bool> Fabrication;
-        internal static ConfigEntry<bool> Construction;
-        internal static ConfigEntry<bool> Appareils;
-        internal static ConfigEntry<bool> Cuisson;
-        internal static ConfigEntry<bool> RemplirDUnCoup;
-        internal static ConfigEntry<bool> PrioriteCoffres;
-        internal static ConfigEntry<bool> IgnorerCoffresOuverts;
-        internal static ConfigEntry<bool> IgnorerChariots;
-        internal static ConfigEntry<string> CoffresExclus;
-        internal static ConfigEntry<KeyboardShortcut> ToucheChoix;
-        internal static ConfigEntry<KeyboardShortcut> ToucheRemplir;
-        internal static ConfigEntry<string> AppareilsChoix;
+        internal static ConfigEntry<float> Radius;
+        internal static ConfigEntry<bool> Crafting;
+        internal static ConfigEntry<bool> Building;
+        internal static ConfigEntry<bool> Stations;
+        internal static ConfigEntry<bool> Cooking;
+        internal static ConfigEntry<bool> FillAtOnce;
+        internal static ConfigEntry<bool> ChestsFirst;
+        internal static ConfigEntry<bool> IgnoreOpenChests;
+        internal static ConfigEntry<bool> IgnoreCarts;
+        internal static ConfigEntry<string> ExcludedChests;
+        internal static ConfigEntry<KeyboardShortcut> ChoiceKey;
+        internal static ConfigEntry<KeyboardShortcut> FillKey;
+        internal static ConfigEntry<string> StationChoices;
 
-        /// <summary>Valeur de choix signifiant « ne rien prendre dans les coffres pour cet appareil ».</summary>
-        internal const string ChoixAucun = "-";
+        /// <summary>Choice value meaning "take nothing from chests for this station".</summary>
+        internal const string ChoiceNone = "-";
 
-        /// <summary>Valeur de choix signifiant « le premier ingrédient trouvé ».</summary>
-        internal const string ChoixAuto = "*";
+        /// <summary>Choice value meaning "the first ingredient found".</summary>
+        internal const string ChoiceAuto = "*";
 
-        /// <summary>Intervalle de rafraîchissement de la liste des coffres proches et du cache de comptage.</summary>
+        /// <summary>Refresh interval of the nearby chest list and of the count cache.</summary>
         private const float ScanInterval = 0.25f;
 
-        /// <summary>Tous les coffres instanciés, alimenté par le patch sur Container.Awake.</summary>
+        /// <summary>Every instantiated chest, fed by the patch on Container.Awake.</summary>
         private static readonly HashSet<Container> AllContainers = new HashSet<Container>();
 
-        /// <summary>Coffres proches retenus au dernier scan.</summary>
+        /// <summary>Nearby chests kept at the last scan.</summary>
         private static readonly List<Container> NearbyContainers = new List<Container>();
 
-        /// <summary>Comptages déjà calculés depuis le dernier scan, clé "nom|qualité|worldLevel".</summary>
+        /// <summary>Counts already computed since the last scan, key "name|quality|worldLevel".</summary>
         private static readonly Dictionary<string, int> CountCache = new Dictionary<string, int>();
 
         private static float _lastScan = -999f;
 
-        /// <summary>Empreinte du contenu des coffres proches, recalculée à chaque scan.</summary>
+        /// <summary>Fingerprint of the nearby chests' contents, recomputed at every scan.</summary>
         private static int _signature;
 
-        /// <summary>Dernière empreinte pour laquelle le panneau d'artisanat a été rafraîchi.</summary>
+        /// <summary>Last fingerprint for which the crafting panel was refreshed.</summary>
         private static int _refreshedSignature;
 
         private static bool _hasSignature;
 
-        /// <summary>Profondeur de la portée craft/construction : les patches sur Inventory n'agissent que si &gt; 0.</summary>
+        /// <summary>Depth of the crafting/building scope: the patches on Inventory only act if &gt; 0.</summary>
         private static int _depth;
 
         private Harmony _harmony;
@@ -100,74 +100,102 @@ namespace ChestCraft
             Log = Logger;
             Instance = this;
 
-            Enabled = Config.Bind("General", "Enabled", true, "Active ou désactive le mod.");
+            Enabled = Config.Bind("General", "Enabled", true, "Enables or disables the mod.");
 
-            Rayon = Config.Bind("General", "Rayon", 20f,
+            Radius = Config.Bind("General", "Radius", 20f,
                 new ConfigDescription(
-                    "Distance en mètres autour du joueur dans laquelle les coffres sont utilisés. " +
-                    "Les coffres non chargés (zone trop éloignée) ne comptent jamais, quelle que soit la valeur.",
+                    "Distance in metres around the player within which chests are used. " +
+                    "Unloaded chests (zone too far away) never count, whatever the value.",
                     new AcceptableValueRange<float>(1f, 200f)));
+            MigrateKey(Radius, "General", "Rayon");
 
-            Fabrication = Config.Bind("General", "Fabrication", true,
-                "Utilise les coffres pour fabriquer et améliorer à l'établi, à la forge, etc.");
+            Crafting = Config.Bind("General", "Crafting", true,
+                "Uses chests to craft and upgrade at the workbench, the forge, etc.");
+            MigrateKey(Crafting, "General", "Fabrication");
 
-            Construction = Config.Bind("General", "Construction", true,
-                "Utilise les coffres pour construire au marteau (et pour la cultivateur, le ciseau, etc.).");
+            Building = Config.Bind("General", "Building", true,
+                "Uses chests to build with the hammer (and with the cultivator, the chisel, etc.).");
+            MigrateKey(Building, "General", "Construction");
 
-            Appareils = Config.Bind("General", "Appareils", true,
-                "Utilise les coffres pour alimenter les appareils : gril (cuisson de la nourriture au-dessus " +
-                "du feu), four à pain, fondoir, four à charbon, haut fourneau, moulin, rouet, raffinerie " +
-                "d'eitr, fermenteur, feux et torches (bois), balistes (munitions). " +
-                "Couvre aussi bien la matière première que le carburant.");
+            Stations = Config.Bind("General", "Stations", true,
+                "Uses chests to feed stations: cooking station (cooking food above " +
+                "the fire), oven, smelter, charcoal kiln, blast furnace, windmill, spinning wheel, eitr " +
+                "refinery, fermenter, fires and torches (wood), ballistas (ammo). " +
+                "Covers the raw material as well as the fuel.");
+            MigrateKey(Stations, "General", "Appareils");
 
-            Cuisson = Config.Bind("General", "Cuisson", false,
-                "Défaut des grils et des fours à pain, les seuls appareils où l'ingrédient pris serait " +
-                "imprévisible (viande de cerf ou de sanglier, tourte ou pain). Désactivé, ils restent " +
-                "vanilla et ne se servent que dans le sac. La touche de choix reste prioritaire : régler " +
-                "un gril en jeu écrase ce défaut pour lui, et le réglage est retenu.");
+            Cooking = Config.Bind("General", "Cooking", false,
+                "Default for cooking stations and ovens, the only stations where the ingredient taken would be " +
+                "unpredictable (deer or boar meat, pie or bread). Disabled, they stay " +
+                "vanilla and only use the backpack. The choice key still takes precedence: setting " +
+                "a cooking station in game overrides this default for it, and the setting is remembered.");
+            MigrateKey(Cooking, "General", "Cuisson");
 
-            RemplirDUnCoup = Config.Bind("General", "RemplirDUnCoup", true,
-                "Autorise le remplissage au maximum en maintenant Controls.ToucheRemplir pendant " +
-                "l'interaction. Concerne le charbon et le minerai des fondoirs, le carburant des grils " +
-                "et le bois des feux. Fonctionne aussi bien depuis le sac que depuis les coffres. " +
-                "Désactivé, chaque appui ajoute une unité comme en vanilla.");
+            FillAtOnce = Config.Bind("General", "FillAtOnce", true,
+                "Allows filling to the maximum by holding Controls.FillKey during " +
+                "the interaction. Applies to coal and ore in smelters, fuel in cooking stations " +
+                "and wood in fires. Works from the backpack as well as from chests. " +
+                "Disabled, each press adds one unit as in vanilla.");
+            MigrateKey(FillAtOnce, "General", "RemplirDUnCoup");
 
-            PrioriteCoffres = Config.Bind("General", "PrioriteCoffres", false,
-                "Prend d'abord dans les coffres et complète avec le sac. " +
-                "Par défaut c'est l'inverse : le sac est vidé en premier.");
+            ChestsFirst = Config.Bind("General", "ChestsFirst", false,
+                "Takes from chests first and completes with the backpack. " +
+                "By default it is the other way round: the backpack is emptied first.");
+            MigrateKey(ChestsFirst, "General", "PrioriteCoffres");
 
-            IgnorerCoffresOuverts = Config.Bind("General", "IgnorerCoffresOuverts", true,
-                "Ignore les coffres qu'un autre joueur est en train de consulter, pour éviter que deux " +
-                "retraits simultanés s'écrasent. Sans effet en solo.");
+            IgnoreOpenChests = Config.Bind("General", "IgnoreOpenChests", true,
+                "Ignores chests another player is currently looking into, so that two " +
+                "simultaneous removals do not overwrite each other. No effect in single player.");
+            MigrateKey(IgnoreOpenChests, "General", "IgnorerCoffresOuverts");
 
-            IgnorerChariots = Config.Bind("General", "IgnorerChariots", false,
-                "Ignore les chariots et les bateaux : seuls les coffres posés au sol sont utilisés.");
+            IgnoreCarts = Config.Bind("General", "IgnoreCarts", false,
+                "Ignores carts and ships: only chests placed on the ground are used.");
+            MigrateKey(IgnoreCarts, "General", "IgnorerChariots");
 
-            ToucheChoix = Config.Bind("Controls", "ToucheChoix", new KeyboardShortcut(KeyCode.R),
-                "Touche qui fait défiler l'ingrédient pris dans les coffres, en visant un appareil. " +
-                "Le cycle est : Automatique, puis chaque ingrédient que l'appareil sait convertir, puis Rien. " +
-                "Le choix est retenu par type d'appareil et survit au redémarrage.");
+            ChoiceKey = Config.Bind("Controls", "ChoiceKey", new KeyboardShortcut(KeyCode.R),
+                "Key that cycles the ingredient taken from chests, while aiming at a station. " +
+                "The cycle is: Automatic, then each ingredient the station can convert, then Nothing. " +
+                "The choice is remembered per station type and survives a restart.");
+            MigrateKey(ChoiceKey, "Controls", "ToucheChoix");
 
-            ToucheRemplir = Config.Bind("Controls", "ToucheRemplir", new KeyboardShortcut(KeyCode.LeftShift),
-                "Touche à maintenir pendant l'interaction pour remplir l'appareil jusqu'à son maximum. " +
-                "Sans elle, un appui ajoute une seule unité, comme en vanilla. " +
-                "Shift est la course du jeu, sans effet à l'arrêt devant un appareil.");
+            FillKey = Config.Bind("Controls", "FillKey", new KeyboardShortcut(KeyCode.LeftShift),
+                "Key to hold during the interaction to fill the station up to its maximum. " +
+                "Without it, a press adds a single unit, as in vanilla. " +
+                "Shift is the game's run key, which does nothing while standing still in front of a station.");
+            MigrateKey(FillKey, "Controls", "ToucheRemplir");
 
-            AppareilsChoix = Config.Bind("Objets", "AppareilsChoix", "",
-                "Choix mémorisés, écrit par le mod quand tu utilises la touche de choix. " +
-                "Format : appareil:ingrédient séparés par des virgules, ex : piece_cookingstation:DeerMeat, smelter:-. " +
-                $"« {ChoixAucun} » signifie que l'appareil ne puise jamais dans les coffres, " +
-                $"« {ChoixAuto} » le premier ingrédient trouvé. " +
-                "Une entrée absente laisse le défaut, réglé par General.Cuisson pour les grils et les fours.");
+            StationChoices = Config.Bind("Items", "StationChoices", "",
+                "Remembered choices, written by the mod when you use the choice key. " +
+                "Format: station:ingredient separated by commas, e.g.: piece_cookingstation:DeerMeat, smelter:-. " +
+                $"\"{ChoiceNone}\" means the station never draws from chests, " +
+                $"\"{ChoiceAuto}\" the first ingredient found. " +
+                "A missing entry keeps the default, set by General.Cooking for cooking stations and ovens.");
+            MigrateKey(StationChoices, "Objets", "AppareilsChoix");
 
-            CoffresExclus = Config.Bind("Objets", "CoffresExclus", "",
-                "Noms de prefab de conteneurs jamais utilisés, séparés par des virgules " +
-                "(ex : piece_chest_private, Karve, piece_cartographytable).");
+            ExcludedChests = Config.Bind("Items", "ExcludedChests", "",
+                "Prefab names of containers never used, separated by commas " +
+                "(e.g.: piece_chest_private, Karve, piece_cartographytable).");
+            MigrateKey(ExcludedChests, "Objets", "CoffresExclus");
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(Plugin).Assembly);
 
-            Log.LogInfo($"{PluginName} {PluginVersion} chargé.");
+            Log.LogInfo($"{PluginName} {PluginVersion} loaded.");
+        }
+
+        /// <summary>
+        /// Keeps the value of a config key renamed when the mod was translated to English: if the old key is still in the
+        /// .cfg (BepInEx keeps unbound keys as orphans), its value moves to the new entry and the old line is dropped.
+        /// </summary>
+        private void MigrateKey(ConfigEntryBase entry, string oldSection, string oldKey)
+        {
+            var old = new ConfigDefinition(oldSection, oldKey);
+            if (!Config.OrphanedEntries.TryGetValue(old, out string value)) return;
+
+            entry.SetSerializedValue(value);
+            Config.OrphanedEntries.Remove(old);
+            Config.Save();
+            Log.LogInfo($"Config key [{oldSection}] {oldKey} migrated to [{entry.Definition.Section}] {entry.Definition.Key}.");
         }
 
         private void OnDestroy()
@@ -179,13 +207,13 @@ namespace ChestCraft
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Portée : ouverte par les points d'entrée craft/construction, fermée par leur Postfix
+        // Scope: opened by the crafting/building entry points, closed by their Postfix
         // ------------------------------------------------------------------------------------------------
 
-        /// <summary>Vrai quand les patches sur Inventory doivent inclure les coffres.</summary>
+        /// <summary>True when the patches on Inventory must include chests.</summary>
         internal static bool Active => Enabled.Value && _depth > 0 && Player.m_localPlayer != null;
 
-        /// <summary>Ouvre la portée si <paramref name="wanted"/>, ou si une portée est déjà ouverte (appel imbriqué).</summary>
+        /// <summary>Opens the scope if <paramref name="wanted"/>, or if a scope is already open (nested call).</summary>
         internal static bool Open(bool wanted)
         {
             if (!Enabled.Value) return false;
@@ -199,7 +227,7 @@ namespace ChestCraft
             if (opened && _depth > 0) _depth--;
         }
 
-        /// <summary>Seul l'inventaire du joueur local est complété par les coffres.</summary>
+        /// <summary>Only the local player's inventory is supplemented by chests.</summary>
         internal static bool IsPlayerInventory(Inventory inventory)
         {
             Player player = Player.m_localPlayer;
@@ -207,7 +235,7 @@ namespace ChestCraft
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Coffres proches
+        // Nearby chests
         // ------------------------------------------------------------------------------------------------
 
         internal static void Register(Container container)
@@ -215,7 +243,7 @@ namespace ChestCraft
             if (container != null) AllContainers.Add(container);
         }
 
-        /// <summary>Découpe une liste "a, b, c" en gardant l'ordre et en ignorant les entrées vides.</summary>
+        /// <summary>Splits a list "a, b, c" keeping the order and ignoring empty entries.</summary>
         private static List<string> ParseList(string raw)
         {
             var list = new List<string>();
@@ -229,10 +257,10 @@ namespace ChestCraft
 
         internal static HashSet<string> ParseExclusions()
         {
-            return new HashSet<string>(ParseList(CoffresExclus.Value), StringComparer.OrdinalIgnoreCase);
+            return new HashSet<string>(ParseList(ExcludedChests.Value), StringComparer.OrdinalIgnoreCase);
         }
 
-        /// <summary>Nom de prefab, sans le suffixe "(Clone)" ajouté par Unity à l'instanciation.</summary>
+        /// <summary>Prefab name, without the "(Clone)" suffix added by Unity on instantiation.</summary>
         internal static string PrefabName(Component component)
         {
             string name = component.gameObject.name;
@@ -241,19 +269,19 @@ namespace ChestCraft
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Choix de l'ingrédient, par type d'appareil
+        // Ingredient choice, per station type
         // ------------------------------------------------------------------------------------------------
 
         private static string _choicesRaw;
         private static Dictionary<string, string> _choicesCache;
 
         /// <summary>
-        /// Choix courants. Lu à chaque appel de portée, donc plusieurs fois par frame : le résultat est
-        /// mémorisé tant que la chaîne de config ne change pas, pour ne pas reparser en boucle.
+        /// Current choices. Read on every scope call, so several times per frame: the result is
+        /// memoised as long as the config string does not change, to avoid reparsing in a loop.
         /// </summary>
         private static Dictionary<string, string> Choices()
         {
-            string raw = AppareilsChoix.Value ?? "";
+            string raw = StationChoices.Value ?? "";
             if (_choicesCache != null && _choicesRaw == raw) return _choicesCache;
 
             _choicesCache = ParseChoices();
@@ -264,12 +292,12 @@ namespace ChestCraft
         private static Dictionary<string, string> ParseChoices()
         {
             var choices = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string entry in ParseList(AppareilsChoix.Value))
+            foreach (string entry in ParseList(StationChoices.Value))
             {
                 int separator = entry.IndexOf(':');
                 if (separator <= 0 || separator == entry.Length - 1)
                 {
-                    Log.LogWarning($"Choix ignoré, format attendu appareil:ingrédient : \"{entry}\"");
+                    Log.LogWarning($"Choice ignored, expected format station:ingredient: \"{entry}\"");
                     continue;
                 }
                 choices[entry.Substring(0, separator).Trim()] = entry.Substring(separator + 1).Trim();
@@ -277,44 +305,44 @@ namespace ChestCraft
             return choices;
         }
 
-        /// <summary>Écrire dans la ConfigEntry suffit à persister : BepInEx sauvegarde à l'affectation.</summary>
+        /// <summary>Writing to the ConfigEntry is enough to persist: BepInEx saves on assignment.</summary>
         private static void SaveChoices(Dictionary<string, string> choices)
         {
-            AppareilsChoix.Value = string.Join(", ", choices.Select(kv => $"{kv.Key}:{kv.Value}").ToArray());
+            StationChoices.Value = string.Join(", ", choices.Select(kv => $"{kv.Key}:{kv.Value}").ToArray());
         }
 
-        /// <summary>Ingrédient retenu pour ce type d'appareil, ou null pour le mode automatique.</summary>
+        /// <summary>Ingredient kept for this station type, or null for automatic mode.</summary>
         /// <summary>
-        /// Réglage courant de l'appareil : toujours ChoixAuto, ChoixAucun, ou un nom de prefab d'ingrédient.
-        /// Sans entrée explicite on retombe sur le défaut, qui est Rien pour les grils et fours tant que
-        /// Cuisson est désactivé : on ne sait pas ce qui va être cuit, autant ne rien prendre tout seul.
+        /// Current setting of the station: always ChoiceAuto, ChoiceNone, or an ingredient prefab name.
+        /// Without an explicit entry it falls back to the default, which is Nothing for cooking stations and
+        /// ovens while Cooking is disabled: we do not know what will be cooked, so better take nothing on our own.
         /// </summary>
         internal static string ChoiceFor(Component station)
         {
-            if (station == null) return ChoixAuto;
-            if (IsHardBlocked(station)) return ChoixAucun;
-            return Choices().TryGetValue(PrefabName(station), out string choice) ? choice : ChoixAuto;
+            if (station == null) return ChoiceAuto;
+            if (IsHardBlocked(station)) return ChoiceNone;
+            return Choices().TryGetValue(PrefabName(station), out string choice) ? choice : ChoiceAuto;
         }
 
         /// <summary>
-        /// Cuisson désactivé coupe les grils et les fours à pain sans appel : un choix enregistré à la
-        /// touche R ne le contourne pas. Autrement le réglage ne servirait à rien sur un appareil déjà
-        /// réglé une fois, ce qui est précisément le cas qu'on veut couvrir.
+        /// Cooking disabled shuts cooking stations and ovens off unconditionally: a choice saved with the
+        /// R key does not bypass it. Otherwise the setting would be useless on a station already
+        /// set once, which is precisely the case we want to cover.
         /// </summary>
         internal static bool IsHardBlocked(Component station)
         {
-            return station is CookingStation && !Cuisson.Value;
+            return station is CookingStation && !Cooking.Value;
         }
 
-        /// <summary>L'appareil est réglé sur Rien : il ne doit rien puiser dans les coffres, carburant compris.</summary>
+        /// <summary>The station is set to Nothing: it must not draw anything from chests, fuel included.</summary>
         internal static bool IsBlocked(Component station)
         {
-            return ChoiceFor(station) == ChoixAucun;
+            return ChoiceFor(station) == ChoiceNone;
         }
 
         /// <summary>
-        /// Ingrédients que cet appareil sait convertir. Le feu et la baliste n'en ont pas : leur cycle se
-        /// réduit à Automatique et Rien, ce qui suffit puisque leur consommable est unique.
+        /// Ingredients this station can convert. Fires and ballistas have none: their cycle comes
+        /// down to Automatic and Nothing, which is enough since their consumable is unique.
         /// </summary>
         internal static List<ItemDrop> InputsOf(Component station)
         {
@@ -336,18 +364,18 @@ namespace ChestCraft
         }
 
         /// <summary>
-        /// Choisit quel ingrédient prendre dans les coffres parmi ceux que l'appareil sait convertir.
-        /// En automatique on garde l'ordre de l'appareil, qui est celui du jeu. Sinon seul l'ingrédient
-        /// retenu peut sortir d'un coffre ; les autres restent accessibles depuis le sac, comme en vanilla.
+        /// Chooses which ingredient to take from chests among those the station can convert.
+        /// In automatic mode the station's order is kept, which is the game's. Otherwise only the chosen
+        /// ingredient can leave a chest; the others stay available from the backpack, as in vanilla.
         /// </summary>
         internal static ItemDrop.ItemData PickFromContainers(Component station)
         {
             string choice = ChoiceFor(station);
-            if (choice == ChoixAucun) return null;
+            if (choice == ChoiceNone) return null;
 
             foreach (ItemDrop drop in InputsOf(station))
             {
-                if (choice != ChoixAuto && !string.Equals(choice, drop.name, StringComparison.OrdinalIgnoreCase)) continue;
+                if (choice != ChoiceAuto && !string.Equals(choice, drop.name, StringComparison.OrdinalIgnoreCase)) continue;
 
                 ItemDrop.ItemData found = FindByNameInContainers(drop.m_itemData.m_shared.m_name);
                 if (found != null) return found;
@@ -355,12 +383,12 @@ namespace ChestCraft
             return null;
         }
 
-        /// <summary>Libellé affiché pour le réglage courant d'un appareil.</summary>
+        /// <summary>Label displayed for the current setting of a station.</summary>
         internal static string ChoiceLabel(Component station)
         {
             string choice = ChoiceFor(station);
-            if (choice == ChoixAuto) return "Automatique";
-            if (choice == ChoixAucun) return "Rien";
+            if (choice == ChoiceAuto) return "Automatic";
+            if (choice == ChoiceNone) return "Nothing";
 
             ItemDrop drop = InputsOf(station).Find(
                 d => string.Equals(choice, d.name, StringComparison.OrdinalIgnoreCase));
@@ -368,27 +396,27 @@ namespace ChestCraft
         }
 
         /// <summary>
-        /// Fait avancer le choix d'un cran : Automatique, chaque ingrédient dans l'ordre de l'appareil,
-        /// puis Rien, puis retour à Automatique.
+        /// Advances the choice by one step: Automatic, each ingredient in the station's order,
+        /// then Nothing, then back to Automatic.
         /// </summary>
         internal static void CycleChoice(Component station)
         {
             List<ItemDrop> inputs = InputsOf(station);
-            var cycle = new List<string> { ChoixAuto };
+            var cycle = new List<string> { ChoiceAuto };
             cycle.AddRange(inputs.Select(d => d.name));
-            cycle.Add(ChoixAucun);
+            cycle.Add(ChoiceNone);
 
             string current = ChoiceFor(station);
             int index = cycle.FindIndex(c => string.Equals(c, current, StringComparison.OrdinalIgnoreCase));
 
-            // Le choix est toujours écrit en clair, jamais effacé : une entrée absente signifie
-            // « défaut », qui n'est pas Automatique pour tous les appareils.
+            // The choice is always written explicitly, never erased: a missing entry means
+            // "default", which is not Automatic for every station.
             var choices = new Dictionary<string, string>(Choices(), StringComparer.OrdinalIgnoreCase);
             choices[PrefabName(station)] = cycle[(index + 1) % cycle.Count];
             SaveChoices(choices);
         }
 
-        /// <summary>Un autre joueur consulte ce coffre : le ZDO le signale mais ce n'est pas nous.</summary>
+        /// <summary>Another player is looking into this chest: the ZDO flags it but it is not us.</summary>
         private static bool OpenedBySomeoneElse(Container container)
         {
             ZDO zdo = container.m_nview.GetZDO();
@@ -414,7 +442,7 @@ namespace ChestCraft
             }
         }
 
-        /// <summary>Liste des coffres utilisables, recalculée au plus toutes les <see cref="ScanInterval"/> secondes.</summary>
+        /// <summary>List of usable chests, recomputed at most every <see cref="ScanInterval"/> seconds.</summary>
         internal static List<Container> Nearby()
         {
             if (Time.time - _lastScan < ScanInterval) return NearbyContainers;
@@ -432,11 +460,11 @@ namespace ChestCraft
             if (player == null) return;
 
             Vector3 center = player.transform.position;
-            float rayon = Rayon.Value * Rayon.Value;
+            float radius = Radius.Value * Radius.Value;
             long playerID = player.GetPlayerID();
-            HashSet<string> exclus = ParseExclusions();
-            bool ignorerOuverts = IgnorerCoffresOuverts.Value;
-            bool ignorerChariots = IgnorerChariots.Value;
+            HashSet<string> excluded = ParseExclusions();
+            bool ignoreOpen = IgnoreOpenChests.Value;
+            bool ignoreCarts = IgnoreCarts.Value;
 
             AllContainers.RemoveWhere(c => c == null);
 
@@ -444,11 +472,11 @@ namespace ChestCraft
             {
                 if (container.m_nview == null || !container.m_nview.IsValid()) continue;
                 if (container.GetInventory() == null) continue;
-                if ((container.transform.position - center).sqrMagnitude > rayon) continue;
-                if (ignorerChariots && (container.m_wagon != null || container.m_rootObjectOverride != null)) continue;
-                if (ignorerOuverts && OpenedBySomeoneElse(container)) continue;
+                if ((container.transform.position - center).sqrMagnitude > radius) continue;
+                if (ignoreCarts && (container.m_wagon != null || container.m_rootObjectOverride != null)) continue;
+                if (ignoreOpen && OpenedBySomeoneElse(container)) continue;
                 if (!AccessAllowed(container, playerID)) continue;
-                if (exclus.Count > 0 && exclus.Contains(PrefabName(container))) continue;
+                if (excluded.Count > 0 && excluded.Contains(PrefabName(container))) continue;
 
                 NearbyContainers.Add(container);
             }
@@ -462,8 +490,8 @@ namespace ChestCraft
         }
 
         /// <summary>
-        /// Empreinte du contenu de tous les coffres retenus. Sert uniquement à détecter un changement,
-        /// pas à identifier quoi que ce soit : une collision ferait seulement rater un rafraîchissement.
+        /// Fingerprint of the contents of every kept chest. Only used to detect a change,
+        /// not to identify anything: a collision would only miss a refresh.
         /// </summary>
         private static int ComputeSignature()
         {
@@ -481,86 +509,86 @@ namespace ChestCraft
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Remplissage en un appui
+        // Fill in one press
         // ------------------------------------------------------------------------------------------------
 
         /// <summary>
-        /// Test « la touche est maintenue », sans passer par KeyboardShortcut.IsPressed().
+        /// "The key is held" test, without going through KeyboardShortcut.IsPressed().
         ///
-        /// IsPressed() exige qu'AUCUNE autre touche du clavier ne soit enfoncée. Or ce test tombe pendant
-        /// que le joueur tient sa touche d'interaction : celle-ci fait échouer la condition à tous les
-        /// coups, et le modificateur n'était donc jamais reconnu.
+        /// IsPressed() requires that NO other keyboard key is held down. But this test runs while
+        /// the player is holding the interaction key: that key makes the condition fail every
+        /// time, so the modifier was never recognised.
         /// </summary>
-        private static bool RemplirDemande()
+        private static bool FillRequested()
         {
-            KeyboardShortcut touche = ToucheRemplir.Value;
-            if (touche.MainKey == KeyCode.None || !Input.GetKey(touche.MainKey)) return false;
+            KeyboardShortcut key = FillKey.Value;
+            if (key.MainKey == KeyCode.None || !Input.GetKey(key.MainKey)) return false;
 
-            foreach (KeyCode modificateur in touche.Modifiers)
+            foreach (KeyCode modifier in key.Modifiers)
             {
-                if (!Input.GetKey(modificateur)) return false;
+                if (!Input.GetKey(modifier)) return false;
             }
             return true;
         }
 
         private static bool _filling;
 
-        /// <summary>Vrai pendant un remplissage : sert à avaler les messages répétés du jeu.</summary>
+        /// <summary>True during a fill: used to swallow the game's repeated messages.</summary>
         internal static bool Filling => _filling;
 
         /// <summary>
-        /// Répète l'ajout que le jeu vient de faire jusqu'à ce que l'appareil refuse, puis résume en un
-        /// seul message.
+        /// Repeats the addition the game just made until the station refuses, then summarises in a
+        /// single message.
         ///
-        /// Deux précautions. La propriété du ZDO est prise d'abord : InvokeRoutedRPC ne s'exécute
-        /// immédiatement que si on est le destinataire, sinon l'ajout partirait sur le réseau et la
-        /// quantité lue à l'itération suivante serait encore l'ancienne, donc la boucle ne s'arrêterait
-        /// jamais d'elle-même. Et le nombre d'ajouts est plafonné par la capacité de l'appareil, au cas où.
+        /// Two precautions. ZDO ownership is taken first: InvokeRoutedRPC only runs immediately
+        /// if we are the recipient, otherwise the addition would go over the network and the
+        /// amount read at the next iteration would still be the old one, so the loop would never
+        /// stop on its own. And the number of additions is capped by the station's capacity, just in case.
         /// </summary>
-        internal static void FillToMax(ZNetView nview, Humanoid user, string label, int capacite, Func<bool> ajouter)
+        internal static void FillToMax(ZNetView nview, Humanoid user, string label, int capacity, Func<bool> add)
         {
-            if (!RemplirDUnCoup.Value || _filling) return;
-            if (!RemplirDemande()) return;
+            if (!FillAtOnce.Value || _filling) return;
+            if (!FillRequested()) return;
             if (nview != null && nview.IsValid() && !nview.IsOwner()) nview.ClaimOwnership();
 
-            int ajoutes = 1; // le premier ajout est celui que le jeu vient de faire
+            int added = 1; // the first addition is the one the game just made
             _filling = true;
             try
             {
-                while (ajoutes < Math.Max(1, capacite) && ajouter()) ajoutes++;
+                while (added < Math.Max(1, capacity) && add()) added++;
             }
             catch (Exception e)
             {
-                Log.LogWarning($"Remplissage interrompu : {e.Message}");
+                Log.LogWarning($"Fill interrupted: {e.Message}");
             }
             finally
             {
                 _filling = false;
             }
 
-            if (user != null) user.Message(MessageHud.MessageType.Center, $"{label} x{ajoutes}");
+            if (user != null) user.Message(MessageHud.MessageType.Center, $"{label} x{added}");
         }
 
-        /// <summary>Nom lisible de l'appareil : celui de la pièce construite, pas celui du prefab.</summary>
+        /// <summary>Readable station name: the one of the built piece, not the prefab's.</summary>
         internal static string StationName(Component station)
         {
             Piece piece = station.GetComponentInParent<Piece>();
             return piece != null ? Localization.instance.Localize(piece.m_name) : PrefabName(station);
         }
 
-        /// <summary>Ligne ajoutée au texte de survol d'un appareil pour montrer et rappeler le réglage.</summary>
+        /// <summary>Line appended to a station's hover text to show and remind the setting.</summary>
         internal static string AppendChoice(Component station, string text)
         {
-            if (!Enabled.Value || !Appareils.Value || string.IsNullOrEmpty(text)) return text;
+            if (!Enabled.Value || !Stations.Value || string.IsNullOrEmpty(text)) return text;
             if (IsHardBlocked(station)) return text;
-            return text + "\n[<color=yellow><b>" + ToucheChoix.Value.MainKey +
-                   "</b></color>] Coffres : " + ChoiceLabel(station);
+            return text + "\n[<color=yellow><b>" + ChoiceKey.Value.MainKey +
+                   "</b></color>] Chests: " + ChoiceLabel(station);
         }
 
-        /// <summary>Nom de touche présentable : l'enum Unity dit "LeftShift" là où le joueur lit "Shift".</summary>
-        private static string NomTouche(KeyCode touche)
+        /// <summary>Presentable key name: the Unity enum says "LeftShift" where the player reads "Shift".</summary>
+        private static string KeyName(KeyCode key)
         {
-            switch (touche)
+            switch (key)
             {
                 case KeyCode.LeftShift:
                 case KeyCode.RightShift: return "Shift";
@@ -568,22 +596,22 @@ namespace ChestCraft
                 case KeyCode.RightControl: return "Ctrl";
                 case KeyCode.LeftAlt:
                 case KeyCode.RightAlt: return "Alt";
-                default: return touche.ToString();
+                default: return key.ToString();
             }
         }
 
-        /// <summary>Rappel de la touche de remplissage, sur les appareils qui empilent plusieurs unités.</summary>
+        /// <summary>Reminder of the fill key, on stations that stack several units.</summary>
         internal static string AppendFill(Component station, string text)
         {
-            if (!Enabled.Value || !RemplirDUnCoup.Value || string.IsNullOrEmpty(text)) return text;
+            if (!Enabled.Value || !FillAtOnce.Value || string.IsNullOrEmpty(text)) return text;
             if (!(station is Smelter || station is CookingStation || station is Fireplace)) return text;
 
-            string utiliser = Localization.instance.Localize("$KEY_Use");
-            return text + "\n[<color=yellow><b>" + NomTouche(ToucheRemplir.Value.MainKey) + " + " + utiliser +
-                   "</b></color>] Tout ajouter";
+            string use = Localization.instance.Localize("$KEY_Use");
+            return text + "\n[<color=yellow><b>" + KeyName(FillKey.Value.MainKey) + " + " + use +
+                   "</b></color>] Add all";
         }
 
-        /// <summary>Appareil auquel appartient cet interrupteur, seulement pour ceux qui ajoutent quelque chose.</summary>
+        /// <summary>Station this switch belongs to, only for those that add something.</summary>
         internal static Component StationOfSwitch(Switch sw)
         {
             CookingStation cooking = sw.GetComponentInParent<CookingStation>();
@@ -607,7 +635,7 @@ namespace ChestCraft
             return null;
         }
 
-        /// <summary>Appareil actuellement visé par le joueur, ou null.</summary>
+        /// <summary>Station currently aimed at by the player, or null.</summary>
         private static Component HoveredStation()
         {
             GameObject hover = Player.m_localPlayer.GetHoverObject();
@@ -631,7 +659,7 @@ namespace ChestCraft
             return null;
         }
 
-        /// <summary>Mêmes verrous que RowTogether : la touche ne part pas pendant qu'on tape ou qu'un menu est ouvert.</summary>
+        /// <summary>Same locks as RowTogether: the key does not fire while typing or while a menu is open.</summary>
         private static bool CanUseInput()
         {
             if (Console.IsVisible() || Menu.IsVisible() || TextInput.IsVisible()) return false;
@@ -640,10 +668,10 @@ namespace ChestCraft
             return true;
         }
 
-        /// <summary>Touche de choix : fait avancer le réglage de l'appareil visé et le confirme à l'écran.</summary>
+        /// <summary>Choice key: advances the setting of the aimed station and confirms it on screen.</summary>
         private static void HandleChoiceKey()
         {
-            if (!Appareils.Value || !ToucheChoix.Value.IsDown() || !CanUseInput()) return;
+            if (!Stations.Value || !ChoiceKey.Value.IsDown() || !CanUseInput()) return;
 
             Component station = HoveredStation();
             if (station == null) return;
@@ -651,24 +679,24 @@ namespace ChestCraft
             if (IsHardBlocked(station))
             {
                 Player.m_localPlayer.Message(MessageHud.MessageType.Center,
-                    $"{StationName(station)} — coffres désactivés (General.Cuisson)");
+                    $"{StationName(station)} — chests disabled (General.Cooking)");
                 return;
             }
 
             CycleChoice(station);
             Player.m_localPlayer.Message(MessageHud.MessageType.Center,
-                $"{StationName(station)} — coffres : {ChoiceLabel(station)}");
+                $"{StationName(station)} — chests: {ChoiceLabel(station)}");
         }
 
         /// <summary>
-        /// Le jeu ne reconstruit la liste des recettes que sur événement (ouverture du panneau, craft,
-        /// changement d'inventaire). Un coffre qui se remplit pendant que le panneau est ouvert ne
-        /// déclenche rien, donc une recette devenue fabricable resterait grisée. Les quantités affichées,
-        /// elles, sont recalculées chaque frame par UpdateRecipe et étaient déjà à jour.
+        /// The game only rebuilds the recipe list on events (panel opening, craft,
+        /// inventory change). A chest filling up while the panel is open does not
+        /// trigger anything, so a recipe that became craftable would stay greyed out. The displayed amounts,
+        /// on the other hand, are recomputed every frame by UpdateRecipe and were already up to date.
         ///
-        /// Appelé depuis Update, donc hors de toute portée : pas de réentrance dans les patches.
-        /// UpdateCraftingPanel est ce que le jeu appelle lui-même après chaque craft, et il conserve la
-        /// recette sélectionnée.
+        /// Called from Update, so outside any scope: no reentrancy in the patches.
+        /// UpdateCraftingPanel is what the game itself calls after each craft, and it keeps the
+        /// selected recipe.
         /// </summary>
         private void Update()
         {
@@ -689,21 +717,21 @@ namespace ChestCraft
             }
             catch (Exception e)
             {
-                Log.LogWarning($"Rafraîchissement du panneau impossible : {e.Message}");
+                Log.LogWarning($"Unable to refresh the panel: {e.Message}");
             }
         }
 
-        /// <summary>Force un recalcul au prochain accès (après un retrait, les comptages sont périmés).</summary>
+        /// <summary>Forces a recount on next access (after a removal, the counts are stale).</summary>
         internal static void Invalidate()
         {
             CountCache.Clear();
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Comptage et retrait
+        // Counting and removal
         // ------------------------------------------------------------------------------------------------
 
-        /// <summary>Comptage vanilla (Inventory.CountItems) appliqué à un inventaire donné, sans repasser par les patches.</summary>
+        /// <summary>Vanilla count (Inventory.CountItems) applied to a given inventory, without going through the patches again.</summary>
         internal static int CountIn(Inventory inventory, string name, int quality, bool matchWorldLevel)
         {
             int total = 0;
@@ -719,7 +747,7 @@ namespace ChestCraft
             return total;
         }
 
-        /// <summary>Total présent dans les coffres proches, mis en cache jusqu'au prochain scan.</summary>
+        /// <summary>Total present in nearby chests, cached until the next scan.</summary>
         internal static int CountInContainers(string name, int quality, bool matchWorldLevel)
         {
             if (name == null) return 0;
@@ -740,7 +768,7 @@ namespace ChestCraft
             return total;
         }
 
-        /// <summary>Premier objet correspondant trouvé dans les coffres proches, ou null.</summary>
+        /// <summary>First matching item found in nearby chests, or null.</summary>
         internal static ItemDrop.ItemData FindInContainers(string name, int quality, int minAmount)
         {
             foreach (Container container in Nearby())
@@ -755,9 +783,9 @@ namespace ChestCraft
         }
 
         /// <summary>
-        /// Retire jusqu'à <paramref name="amount"/> exemplaires dans les coffres proches et renvoie la
-        /// quantité réellement retirée. Prend la propriété du ZDO avant d'écrire, sinon le serveur
-        /// écraserait la modification à la prochaine synchronisation.
+        /// Removes up to <paramref name="amount"/> items from nearby chests and returns the
+        /// amount actually removed. Takes ZDO ownership before writing, otherwise the server
+        /// would overwrite the change at the next synchronisation.
         /// </summary>
         internal static int RemoveFromContainers(string name, int amount, int quality, bool worldLevelBased)
         {
@@ -783,8 +811,8 @@ namespace ChestCraft
         }
 
         /// <summary>
-        /// Prend la propriété du ZDO, applique l'écriture, puis force la sauvegarde. Sans ClaimOwnership
-        /// la modification serait écrasée à la prochaine synchronisation venant du propriétaire réel.
+        /// Takes ZDO ownership, applies the write, then forces a save. Without ClaimOwnership
+        /// the change would be overwritten at the next synchronisation coming from the actual owner.
         /// </summary>
         private static bool WriteTo(Container container, Action<Inventory> write)
         {
@@ -798,12 +826,12 @@ namespace ChestCraft
             }
             catch (Exception e)
             {
-                Log.LogWarning($"Écriture impossible dans {PrefabName(container)} : {e.Message}");
+                Log.LogWarning($"Unable to write to {PrefabName(container)}: {e.Message}");
                 return false;
             }
         }
 
-        /// <summary>Coffre proche qui détient physiquement cet objet, ou null si l'objet vient du sac.</summary>
+        /// <summary>Nearby chest that physically holds this item, or null if the item comes from the backpack.</summary>
         internal static Container OwnerOf(ItemDrop.ItemData item)
         {
             if (item == null) return null;
@@ -815,8 +843,8 @@ namespace ChestCraft
         }
 
         /// <summary>
-        /// Retrait d'un objet désigné par identité, redirigé vers le coffre qui le détient.
-        /// Renvoie false si l'objet n'appartient à aucun coffre proche : c'est alors au jeu de le retirer.
+        /// Removal of an item designated by identity, redirected to the chest that holds it.
+        /// Returns false if the item belongs to no nearby chest: it is then up to the game to remove it.
         /// </summary>
         private static bool RemoveExact(ItemDrop.ItemData item, Action<Inventory> write)
         {
@@ -839,7 +867,7 @@ namespace ChestCraft
             return RemoveExact(item, inv => inv.RemoveItem(item, amount));
         }
 
-        /// <summary>Équivalent de Inventory.GetItem(nom) appliqué aux coffres proches.</summary>
+        /// <summary>Equivalent of Inventory.GetItem(name) applied to nearby chests.</summary>
         internal static ItemDrop.ItemData FindByNameInContainers(string name)
         {
             if (name == null) return null;
@@ -853,7 +881,7 @@ namespace ChestCraft
             return null;
         }
 
-        /// <summary>Équivalent de Inventory.GetAmmoItem appliqué aux coffres proches (balistes, tourelles).</summary>
+        /// <summary>Equivalent of Inventory.GetAmmoItem applied to nearby chests (ballistas, turrets).</summary>
         internal static ItemDrop.ItemData FindAmmoInContainers(string ammoName, string matchPrefabName)
         {
             foreach (Container container in Nearby())
@@ -875,14 +903,14 @@ namespace ChestCraft
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Diagnostic
+        // Diagnostics
         // ------------------------------------------------------------------------------------------------
 
         internal static string DescribeNearby()
         {
             var sb = new StringBuilder();
             Player player = Player.m_localPlayer;
-            if (player == null) return "Pas de joueur local.";
+            if (player == null) return "No local player.";
 
             _lastScan = -999f;
             List<Container> containers = Nearby();
@@ -893,20 +921,20 @@ namespace ChestCraft
                 Inventory inventory = container.GetInventory();
                 float distance = Vector3.Distance(container.transform.position, center);
                 sb.AppendLine($"{PrefabName(container),-28} {distance,5:0.0} m  " +
-                              $"{inventory.NrOfItems(),3} pile(s)  propriétaire : {(container.m_nview.IsOwner() ? "moi" : "autre")}");
+                              $"{inventory.NrOfItems(),3} stack(s)  owner: {(container.m_nview.IsOwner() ? "me" : "other")}");
             }
 
-            sb.AppendLine($"{containers.Count} coffre(s) dans un rayon de {Rayon.Value:0.#} m " +
-                          $"sur {AllContainers.Count} chargé(s).");
+            sb.AppendLine($"{containers.Count} chest(s) within a radius of {Radius.Value:0.#} m " +
+                          $"out of {AllContainers.Count} loaded.");
             return sb.ToString();
         }
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Enregistrement des coffres
+    // Chest registration
     // ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Chaque conteneur instancié s'inscrit lui-même : pas de requête physique à faire ensuite.</summary>
+    /// <summary>Each instantiated container registers itself: no physics query needed afterwards.</summary>
     [HarmonyPatch(typeof(Container), nameof(Container.Awake))]
     internal static class Container_Awake_Patch
     {
@@ -917,17 +945,17 @@ namespace ChestCraft
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Points d'entrée : ouverture de la portée
+    // Entry points: opening the scope
     // ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Recette : état du bouton Fabriquer, et vérification refaite au moment du craft.</summary>
+    /// <summary>Recipe: state of the Craft button, and the check done again at crafting time.</summary>
     [HarmonyPatch(typeof(Player), nameof(Player.HaveRequirements),
         new[] { typeof(Recipe), typeof(bool), typeof(int), typeof(int) })]
     internal static class Player_HaveRequirementsRecipe_Patch
     {
         private static void Prefix(out bool __state)
         {
-            __state = Plugin.Open(Plugin.Fabrication.Value);
+            __state = Plugin.Open(Plugin.Crafting.Value);
         }
 
         private static void Finalizer(bool __state)
@@ -936,14 +964,14 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Pièce de construction : grisage dans le menu du marteau et test avant la pose.</summary>
+    /// <summary>Building piece: greying out in the hammer menu and check before placement.</summary>
     [HarmonyPatch(typeof(Player), nameof(Player.HaveRequirements),
         new[] { typeof(Piece), typeof(Player.RequirementMode) })]
     internal static class Player_HaveRequirementsPiece_Patch
     {
         private static void Prefix(out bool __state)
         {
-            __state = Plugin.Open(Plugin.Construction.Value);
+            __state = Plugin.Open(Plugin.Building.Value);
         }
 
         private static void Finalizer(bool __state)
@@ -952,14 +980,14 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Consommation des matériaux, à la fois pour le craft et pour la pose d'une pièce.</summary>
+    /// <summary>Material consumption, both for crafting and for placing a piece.</summary>
     [HarmonyPatch(typeof(Player), nameof(Player.ConsumeResources))]
     internal static class Player_ConsumeResources_Patch
     {
         private static void Prefix(out bool __state)
         {
-            // Pendant un craft la portée est déjà ouverte par DoCrafting : Open la conserve.
-            __state = Plugin.Open(Plugin.Construction.Value);
+            // During a craft the scope is already opened by DoCrafting: Open keeps it.
+            __state = Plugin.Open(Plugin.Building.Value);
         }
 
         private static void Finalizer(bool __state)
@@ -968,13 +996,13 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Ligne "matériau x quantité" du panneau d'artisanat et du menu de construction.</summary>
+    /// <summary>"material x amount" line of the crafting panel and of the building menu.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.SetupRequirement))]
     internal static class InventoryGui_SetupRequirement_Patch
     {
         private static void Prefix(bool craft, out bool __state)
         {
-            __state = Plugin.Open(craft ? Plugin.Fabrication.Value : Plugin.Construction.Value);
+            __state = Plugin.Open(craft ? Plugin.Crafting.Value : Plugin.Building.Value);
         }
 
         private static void Finalizer(bool __state)
@@ -983,13 +1011,13 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Le craft lui-même : couvre la consommation et le cas "un seul ingrédient au choix".</summary>
+    /// <summary>The craft itself: covers consumption and the "only one ingredient of your choice" case.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.DoCrafting))]
     internal static class InventoryGui_DoCrafting_Patch
     {
         private static void Prefix(out bool __state)
         {
-            __state = Plugin.Open(Plugin.Fabrication.Value);
+            __state = Plugin.Open(Plugin.Crafting.Value);
         }
 
         private static void Finalizer(bool __state)
@@ -999,16 +1027,16 @@ namespace ChestCraft
     }
 
     /// <summary>
-    /// Recettes à ingrédient unique au choix (Recipe.m_requireOnlyOneIngredient) : le jeu cherche
-    /// l'ingrédient dans le sac uniquement. S'il n'y est pas, on en désigne un pris dans les coffres ;
-    /// le retrait qui suit passe par Inventory.RemoveItem, donc par le patch plus bas.
+    /// Recipes with a single ingredient of your choice (Recipe.m_requireOnlyOneIngredient): the game looks for
+    /// the ingredient in the backpack only. If it is not there, we designate one taken from chests;
+    /// the removal that follows goes through Inventory.RemoveItem, hence through the patch below.
     /// </summary>
     [HarmonyPatch(typeof(Player), nameof(Player.GetFirstRequiredItem))]
     internal static class Player_GetFirstRequiredItem_Patch
     {
         private static void Prefix(out bool __state)
         {
-            __state = Plugin.Open(Plugin.Fabrication.Value);
+            __state = Plugin.Open(Plugin.Crafting.Value);
         }
 
         private static void Postfix(Player __instance, Recipe recipe, int qualityLevel, int craftMultiplier,
@@ -1050,7 +1078,7 @@ namespace ChestCraft
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Méthodes feuilles : c'est ici que les coffres s'ajoutent au sac
+    // Leaf methods: this is where chests are added to the backpack
     // ----------------------------------------------------------------------------------------------------
 
     [HarmonyPatch(typeof(Inventory), nameof(Inventory.CountItems),
@@ -1077,8 +1105,8 @@ namespace ChestCraft
     }
 
     /// <summary>
-    /// Retrait par nom : le sac d'abord, les coffres pour le reste (ou l'inverse selon PrioriteCoffres).
-    /// Le Prefix baisse la quantité demandée au jeu de ce qui a été pris ailleurs.
+    /// Removal by name: the backpack first, chests for the rest (or the other way round depending on ChestsFirst).
+    /// The Prefix lowers the amount requested from the game by what was taken elsewhere.
     /// </summary>
     [HarmonyPatch(typeof(Inventory), nameof(Inventory.RemoveItem),
         new[] { typeof(string), typeof(int), typeof(int), typeof(bool) })]
@@ -1090,13 +1118,13 @@ namespace ChestCraft
             __state = 0;
             if (!Plugin.Active || !Plugin.IsPlayerInventory(__instance)) return;
 
-            if (Plugin.PrioriteCoffres.Value)
+            if (Plugin.ChestsFirst.Value)
             {
                 amount -= Plugin.RemoveFromContainers(name, amount, itemQuality, worldLevelBased);
             }
             else
             {
-                // Ce que le sac ne couvre pas sera pris dans les coffres après coup.
+                // What the backpack does not cover will be taken from chests afterwards.
                 __state = amount - Plugin.CountIn(__instance, name, itemQuality, worldLevelBased);
             }
         }
@@ -1111,14 +1139,14 @@ namespace ChestCraft
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Appareils : gril, four, fondoir, moulin, rouet, fermenteur, feu, baliste
+    // Stations: cooking station, oven, smelter, windmill, spinning wheel, fermenter, fire, ballista
     // ----------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Ces appareils ne fabriquent pas, ils convertissent : ils prennent l'objet directement dans le sac
-    /// par leur propre chemin, sans passer par Player.HaveRequirements ni ConsumeResources. Un seul patch
-    /// à cibles multiples ouvre la portée sur chacun de leurs points d'entrée, y compris les méthodes
-    /// d'infobulle (CanUseItems, TryGetItems) pour que l'invite affichée corresponde à ce qui est possible.
+    /// These stations do not craft, they convert: they take the item directly from the backpack
+    /// through their own path, without going through Player.HaveRequirements or ConsumeResources. A single
+    /// multi-target patch opens the scope on each of their entry points, including the tooltip
+    /// methods (CanUseItems, TryGetItems) so that the displayed prompt matches what is possible.
     /// </summary>
     [HarmonyPatch]
     internal static class Stations_Scope_Patch
@@ -1149,7 +1177,7 @@ namespace ChestCraft
 
         private static void Prefix(MonoBehaviour __instance, out bool __state)
         {
-            __state = Plugin.Open(Plugin.Appareils.Value && !Plugin.IsBlocked(__instance));
+            __state = Plugin.Open(Plugin.Stations.Value && !Plugin.IsBlocked(__instance));
         }
 
         private static void Finalizer(bool __state)
@@ -1159,8 +1187,8 @@ namespace ChestCraft
     }
 
     /// <summary>
-    /// Gril et four : l'aliment à cuire. Volontairement séparé de FindIncompatibleItem, qui reste limité
-    /// au sac. Sinon un objet interdit rangé dans un coffre bloquerait la cuisson.
+    /// Cooking station and oven: the food to cook. Deliberately separate from FindIncompatibleItem, which stays limited
+    /// to the backpack. Otherwise a forbidden item stored in a chest would block cooking.
     /// </summary>
     [HarmonyPatch(typeof(CookingStation), nameof(CookingStation.FindCookableItem))]
     internal static class CookingStation_FindCookableItem_Patch
@@ -1172,7 +1200,7 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Fondoir, four à charbon, moulin, rouet, raffinerie d'eitr : la matière première.</summary>
+    /// <summary>Smelter, charcoal kiln, windmill, spinning wheel, eitr refinery: the raw material.</summary>
     [HarmonyPatch(typeof(Smelter), nameof(Smelter.FindCookableItem))]
     internal static class Smelter_FindCookableItem_Patch
     {
@@ -1183,7 +1211,7 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Fermenteur : le tonneau d'hydromel à faire fermenter.</summary>
+    /// <summary>Fermenter: the mead base barrel to ferment.</summary>
     [HarmonyPatch(typeof(Fermenter), nameof(Fermenter.FindCookableItem))]
     internal static class Fermenter_FindCookableItem_Patch
     {
@@ -1195,9 +1223,9 @@ namespace ChestCraft
     }
 
     /// <summary>
-    /// Rappel du réglage sur le texte de survol. Deux chemins existent : les appareils sans interrupteur
-    /// construisent eux-mêmes leur texte, les autres délèguent à Switch. CookingStation.GetHoverText rend
-    /// une chaîne vide quand un interrupteur existe, d'où le garde sur le texte vide côté AppendChoice.
+    /// Setting reminder on the hover text. Two paths exist: stations without a switch
+    /// build their text themselves, the others delegate to Switch. CookingStation.GetHoverText returns
+    /// an empty string when a switch exists, hence the empty text guard in AppendChoice.
     /// </summary>
     [HarmonyPatch(typeof(CookingStation), nameof(CookingStation.GetHoverText))]
     internal static class CookingStation_GetHoverText_Patch
@@ -1217,7 +1245,7 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Feux et torches : ils construisent leur texte de survol eux-mêmes.</summary>
+    /// <summary>Fires and torches: they build their hover text themselves.</summary>
     [HarmonyPatch(typeof(Fireplace), nameof(Fireplace.GetHoverText))]
     internal static class Fireplace_GetHoverText_Patch
     {
@@ -1227,7 +1255,7 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Interrupteurs d'ajout : ceux du fondoir, du four et du fermenteur.</summary>
+    /// <summary>Add switches: those of the smelter, the oven and the fermenter.</summary>
     [HarmonyPatch(typeof(Switch), nameof(Switch.GetHoverText))]
     internal static class Switch_GetHoverText_Patch
     {
@@ -1238,7 +1266,7 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Munitions des balistes : Turret.FindAmmoItem passe par là.</summary>
+    /// <summary>Ballista ammo: Turret.FindAmmoItem goes through here.</summary>
     [HarmonyPatch(typeof(Inventory), nameof(Inventory.GetAmmoItem))]
     internal static class Inventory_GetAmmoItem_Patch
     {
@@ -1251,13 +1279,13 @@ namespace ChestCraft
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Retrait par identité : l'objet désigné appartient à un coffre, pas au sac
+    // Removal by identity: the designated item belongs to a chest, not to the backpack
     // ----------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Les appareils retirent l'objet qu'ils ont trouvé, par référence et non par nom. Quand cette
-    /// référence vient d'un coffre, la retirer du sac échouerait sans rien dire et l'objet serait dupliqué :
-    /// consommé par l'appareil, toujours présent dans le coffre. Ces trois patches redirigent le retrait.
+    /// Stations remove the item they found, by reference and not by name. When that
+    /// reference comes from a chest, removing it from the backpack would silently fail and the item would be duplicated:
+    /// consumed by the station, still present in the chest. These three patches redirect the removal.
     /// </summary>
     [HarmonyPatch(typeof(Inventory), nameof(Inventory.RemoveOneItem))]
     internal static class Inventory_RemoveOneItem_Patch
@@ -1302,10 +1330,10 @@ namespace ChestCraft
     }
 
     // ----------------------------------------------------------------------------------------------------
-    // Remplissage en un appui
+    // Fill in one press
     // ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Le jeu répète son message à chaque unité ajoutée : on l'avale et on résume à la fin.</summary>
+    /// <summary>The game repeats its message for every unit added: we swallow it and summarise at the end.</summary>
     [HarmonyPatch(typeof(Player), nameof(Player.Message))]
     internal static class Player_Message_Patch
     {
@@ -1315,7 +1343,7 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Charbon et bois des fondoirs, fours à charbon, hauts fourneaux.</summary>
+    /// <summary>Coal and wood of smelters, charcoal kilns, blast furnaces.</summary>
     [HarmonyPatch(typeof(Smelter), nameof(Smelter.OnAddFuel))]
     internal static class Smelter_OnAddFuel_Fill_Patch
     {
@@ -1328,7 +1356,7 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Minerai des fondoirs, orge des moulins, lin des rouets.</summary>
+    /// <summary>Ore of smelters, barley of windmills, flax of spinning wheels.</summary>
     [HarmonyPatch(typeof(Smelter), nameof(Smelter.OnAddOre))]
     internal static class Smelter_OnAddOre_Fill_Patch
     {
@@ -1340,7 +1368,7 @@ namespace ChestCraft
         }
     }
 
-    /// <summary>Carburant des grils et des fours à pain.</summary>
+    /// <summary>Fuel of cooking stations and ovens.</summary>
     [HarmonyPatch(typeof(CookingStation), nameof(CookingStation.OnAddFuelSwitch))]
     internal static class CookingStation_OnAddFuel_Fill_Patch
     {
@@ -1354,9 +1382,9 @@ namespace ChestCraft
     }
 
     /// <summary>
-    /// Bois des feux et des torches. Interact sert aussi à allumer et éteindre : le Prefix repère ce
-    /// cas-là pour ne pas le confondre avec un ajout. La répétition passe alt à true, ce qui est
-    /// exactement la condition qui saute la bascule allumé/éteint.
+    /// Wood of fires and torches. Interact is also used to light and put out: the Prefix detects that
+    /// case so as not to mistake it for an addition. The repetition sets alt to true, which is
+    /// exactly the condition that skips the lit/unlit toggle.
     /// </summary>
     [HarmonyPatch(typeof(Fireplace), nameof(Fireplace.Interact))]
     internal static class Fireplace_Interact_Fill_Patch
@@ -1382,7 +1410,7 @@ namespace ChestCraft
     // Console
     // ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Commandes console chestcraft_list et chestcraft_reload.</summary>
+    /// <summary>Console commands chestcraft_list and chestcraft_reload.</summary>
     [HarmonyPatch(typeof(Terminal), nameof(Terminal.InitTerminal))]
     internal static class Terminal_InitTerminal_Patch
     {
@@ -1394,11 +1422,11 @@ namespace ChestCraft
             _registered = true;
 
             new Terminal.ConsoleCommand("chestcraft_list",
-                "Liste les coffres pris en compte autour du joueur, avec leur distance et leur propriétaire.",
+                "Lists the chests taken into account around the player, with their distance and their owner.",
                 delegate (Terminal.ConsoleEventArgs args)
                 {
                     string text = Plugin.DescribeNearby();
-                    Plugin.Log.LogInfo("chestcraft_list :\n" + text);
+                    Plugin.Log.LogInfo("chestcraft_list:\n" + text);
                     foreach (string line in text.Split('\n'))
                     {
                         if (line.Trim().Length > 0) args.Context.AddString(line);
@@ -1406,12 +1434,12 @@ namespace ChestCraft
                 });
 
             new Terminal.ConsoleCommand("chestcraft_reload",
-                "Recharge la config ChestCraft depuis le fichier.",
+                "Reloads the ChestCraft config from the file.",
                 delegate (Terminal.ConsoleEventArgs args)
                 {
                     Plugin.Instance.Config.Reload();
                     Plugin.Invalidate();
-                    args.Context.AddString("Config ChestCraft rechargée.");
+                    args.Context.AddString("ChestCraft config reloaded.");
                 });
         }
     }

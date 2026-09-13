@@ -13,42 +13,42 @@ using UnityEngine.UI;
 namespace Uncraft
 {
     /// <summary>
-    /// Décrafter les objets fabricables dans leur atelier pour récupérer les matériaux.
+    /// Uncraft craftable items at their crafting station to get the materials back.
     ///
-    /// - Un onglet "Décrafter" est ajouté à côté de "Fabriquer" / "Améliorer" dans le panneau d'artisanat,
-    ///   visible seulement près d'un atelier.
-    /// - La liste montre les objets de l'inventaire dont la recette se fabrique à l'atelier courant (ou à la
-    ///   main). Le panneau de droite affiche les matériaux rendus, le bouton lance le décraft avec la barre
-    ///   de progression vanilla.
-    /// - Matériaux rendus = coût de fabrication + coûts d'amélioration jusqu'à la qualité de l'objet,
-    ///   multipliés par Ratio. Les recettes "un seul ingrédient au choix" ne sont pas décraftables
-    ///   (impossible de savoir quel ingrédient rendre).
-    /// - Ce qui ne tient pas dans l'inventaire est déposé au sol devant le joueur.
+    /// - An "Uncraft" tab is added next to "Craft" / "Upgrade" in the crafting panel,
+    ///   visible only near a crafting station.
+    /// - The list shows the inventory items whose recipe is crafted at the current station (or by
+    ///   hand). The right panel shows the materials returned, the button starts the uncraft with the vanilla
+    ///   progress bar.
+    /// - Materials returned = crafting cost + upgrade costs up to the item's quality,
+    ///   multiplied by Ratio. "Any one ingredient" recipes cannot be uncrafted
+    ///   (no way to know which ingredient to return).
+    /// - Whatever does not fit in the inventory is dropped on the ground in front of the player.
     ///
-    /// Multijoueur : tout se passe dans l'inventaire du joueur local, synchronisé par le jeu lui-même.
-    /// Seuls les joueurs qui veulent décrafter ont besoin du mod.
+    /// Multiplayer: everything happens in the local player's inventory, synchronized by the game itself.
+    /// Only players who want to uncraft need the mod.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGuid = "valheim.uncraft";
         public const string PluginName = "Uncraft";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.0.1";
 
         internal static ManualLogSource Log;
 
         internal static ConfigEntry<bool> Enabled;
         internal static ConfigEntry<float> Ratio;
-        internal static ConfigEntry<bool> ExigerNiveauAtelier;
-        internal static ConfigEntry<bool> AutoriserRecettesSansAtelier;
-        internal static ConfigEntry<bool> SeulementObjetsFabriques;
-        internal static ConfigEntry<bool> DecrafterToutePile;
-        internal static ConfigEntry<string> ObjetsExclus;
+        internal static ConfigEntry<bool> RequireStationLevel;
+        internal static ConfigEntry<bool> AllowRecipesWithoutStation;
+        internal static ConfigEntry<bool> OnlyCraftedItems;
+        internal static ConfigEntry<bool> UncraftWholeStack;
+        internal static ConfigEntry<string> ExcludedItems;
 
-        /// <summary>Bouton d'onglet "Décrafter", cloné depuis l'onglet "Améliorer" au démarrage de l'interface.</summary>
+        /// <summary>"Uncraft" tab button, cloned from the "Upgrade" tab when the UI starts.</summary>
         internal static Button TabButton;
 
-        /// <summary>Décraft en attente : lancé au clic, exécuté quand la barre de progression vanilla se termine.</summary>
+        /// <summary>Pending uncraft: started on click, executed when the vanilla progress bar completes.</summary>
         internal static Recipe PendingRecipe;
         internal static ItemDrop.ItemData PendingItem;
 
@@ -58,36 +58,56 @@ namespace Uncraft
         {
             Log = Logger;
 
-            Enabled = Config.Bind("General", "Enabled", true, "Active ou désactive le mod (l'onglet disparaît si désactivé).");
+            Enabled = Config.Bind("General", "Enabled", true, "Enables or disables the mod (the tab disappears when disabled).");
 
             Ratio = Config.Bind("General", "Ratio", 1.0f,
                 new ConfigDescription(
-                    "Part des matériaux rendus au décraft. 1.0 = tout, 0.5 = la moitié (arrondi à l'inférieur, " +
-                    "un matériau dont le résultat tombe à 0 n'est pas rendu).",
+                    "Share of materials returned when uncrafting. 1.0 = everything, 0.5 = half (rounded down, " +
+                    "a material whose result drops to 0 is not returned).",
                     new AcceptableValueRange<float>(0f, 1f)));
 
-            ExigerNiveauAtelier = Config.Bind("General", "ExigerNiveauAtelier", true,
-                "Exige le même niveau d'atelier que pour fabriquer l'objet à sa qualité actuelle " +
-                "(un objet qualité 3 demande le niveau requis pour l'amélioration 3).");
+            RequireStationLevel = Config.Bind("General", "RequireStationLevel", true,
+                "Requires the same station level as crafting the item at its current quality " +
+                "(a quality 3 item needs the level required for upgrade 3).");
+            MigrateKey(RequireStationLevel, "General", "ExigerNiveauAtelier");
 
-            AutoriserRecettesSansAtelier = Config.Bind("General", "AutoriserRecettesSansAtelier", true,
-                "Les objets fabricables à la main (torche, marteau, massue...) peuvent être décraftés dans n'importe quel atelier.");
+            AllowRecipesWithoutStation = Config.Bind("General", "AllowRecipesWithoutStation", true,
+                "Items craftable by hand (torch, hammer, club...) can be uncrafted at any crafting station.");
+            MigrateKey(AllowRecipesWithoutStation, "General", "AutoriserRecettesSansAtelier");
 
-            SeulementObjetsFabriques = Config.Bind("General", "SeulementObjetsFabriques", false,
-                "N'autorise que les objets fabriqués par un joueur (refuse le butin trouvé ou acheté).");
+            OnlyCraftedItems = Config.Bind("General", "OnlyCraftedItems", false,
+                "Only allows items crafted by a player (refuses loot that was found or bought).");
+            MigrateKey(OnlyCraftedItems, "General", "SeulementObjetsFabriques");
 
-            DecrafterToutePile = Config.Bind("General", "DecrafterToutePile", false,
-                "Décrafte toute la pile d'un coup (par lots de la recette, ex : 20 flèches par lot). " +
-                "Sinon un seul lot par clic.");
+            UncraftWholeStack = Config.Bind("General", "UncraftWholeStack", false,
+                "Uncrafts the whole stack at once (in recipe batches, e.g. 20 arrows per batch). " +
+                "Otherwise a single batch per click.");
+            MigrateKey(UncraftWholeStack, "General", "DecrafterToutePile");
 
-            ObjetsExclus = Config.Bind("Objets", "Exclus", "",
-                "Noms de prefab jamais décraftables, séparés par des virgules (ex : Bronze, BlackMetal). " +
-                "Les noms sont ceux de BepInEx/config/valheim.stackmax.objets.txt si StackMax est installé.");
+            ExcludedItems = Config.Bind("Items", "Excluded", "",
+                "Prefab names that can never be uncrafted, comma separated (e.g. Bronze, BlackMetal). " +
+                "The names are the ones in BepInEx/config/valheim.stackmax.items.txt if StackMax is installed.");
+            MigrateKey(ExcludedItems, "Objets", "Exclus");
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(Plugin).Assembly);
 
-            Log.LogInfo($"{PluginName} {PluginVersion} chargé.");
+            Log.LogInfo($"{PluginName} {PluginVersion} loaded.");
+        }
+
+        /// <summary>
+        /// Keeps the value of a config key renamed when the mod was translated to English: if the old key is still in the
+        /// .cfg (BepInEx keeps unbound keys as orphans), its value moves to the new entry and the old line is dropped.
+        /// </summary>
+        private void MigrateKey(ConfigEntryBase entry, string oldSection, string oldKey)
+        {
+            var old = new ConfigDefinition(oldSection, oldKey);
+            if (!Config.OrphanedEntries.TryGetValue(old, out string value)) return;
+
+            entry.SetSerializedValue(value);
+            Config.OrphanedEntries.Remove(old);
+            Config.Save();
+            Log.LogInfo($"Config key [{oldSection}] {oldKey} migrated to [{entry.Definition.Section}] {entry.Definition.Key}.");
         }
 
         private void OnDestroy()
@@ -96,7 +116,7 @@ namespace Uncraft
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Logique de décraft
+        // Uncraft logic
         // ------------------------------------------------------------------------------------------------
 
         internal sealed class Refund
@@ -113,7 +133,7 @@ namespace Uncraft
         internal static HashSet<string> ParseExclusions()
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string s in (ObjetsExclus.Value ?? "").Split(','))
+            foreach (string s in (ExcludedItems.Value ?? "").Split(','))
             {
                 string t = s.Trim();
                 if (t.Length > 0) set.Add(t);
@@ -121,7 +141,7 @@ namespace Uncraft
             return set;
         }
 
-        /// <summary>Recette activée qui produit cet objet, ou null.</summary>
+        /// <summary>Enabled recipe that produces this item, or null.</summary>
         internal static Recipe FindRecipe(ItemDrop.ItemData item)
         {
             if (item == null || ObjectDB.instance == null) return null;
@@ -130,18 +150,18 @@ namespace Uncraft
             return recipe;
         }
 
-        /// <summary>Nombre de lots décraftés en un clic (un lot = m_amount objets).</summary>
+        /// <summary>Number of batches uncrafted in one click (one batch = m_amount items).</summary>
         internal static int Batches(Recipe recipe, ItemDrop.ItemData item)
         {
             int perBatch = Mathf.Max(1, recipe.m_amount);
             int available = item.m_stack / perBatch;
             if (available <= 0) return 0;
-            return DecrafterToutePile.Value ? available : 1;
+            return UncraftWholeStack.Value ? available : 1;
         }
 
         /// <summary>
-        /// Matériaux rendus : pour chaque ressource, coût de fabrication (niveau 1) plus coûts d'amélioration
-        /// de 2 jusqu'à la qualité de l'objet, fois le nombre de lots, fois Ratio.
+        /// Materials returned: for each resource, crafting cost (level 1) plus upgrade costs
+        /// from 2 up to the item's quality, times the number of batches, times Ratio.
         /// </summary>
         internal static List<Refund> ComputeRefunds(Recipe recipe, int quality, int batches)
         {
@@ -157,42 +177,42 @@ namespace Uncraft
             return list;
         }
 
-        /// <summary>L'atelier courant permet-il de décrafter cette recette (même atelier, ou recette à la main) ?</summary>
+        /// <summary>Does the current station allow uncrafting this recipe (same station, or hand recipe)?</summary>
         internal static bool StationMatches(Recipe recipe, CraftingStation current)
         {
             CraftingStation required = recipe.m_craftingStation;
-            if (required == null) return AutoriserRecettesSansAtelier.Value;
+            if (required == null) return AllowRecipesWithoutStation.Value;
             return current != null && current.m_name == required.m_name;
         }
 
         internal static bool CanUncraft(Player player, Recipe recipe, ItemDrop.ItemData item, out string reason)
         {
             reason = "";
-            if (!Enabled.Value || player == null || recipe == null || item == null) { reason = "Décraft indisponible"; return false; }
+            if (!Enabled.Value || player == null || recipe == null || item == null) { reason = "Uncraft unavailable"; return false; }
 
             if (recipe.m_requireOnlyOneIngredient)
             {
-                reason = "Recette à ingrédient variable : impossible de savoir quoi rendre";
+                reason = "Variable ingredient recipe: no way to know what to return";
                 return false;
             }
             if (ParseExclusions().Contains(recipe.m_item.name))
             {
-                reason = "Objet exclu par la configuration";
+                reason = "Item excluded by the configuration";
                 return false;
             }
-            if (SeulementObjetsFabriques.Value && item.m_crafterID == 0)
+            if (OnlyCraftedItems.Value && item.m_crafterID == 0)
             {
-                reason = "Cet objet n'a pas été fabriqué par un joueur";
+                reason = "This item was not crafted by a player";
                 return false;
             }
             if (Batches(recipe, item) <= 0)
             {
-                reason = $"Il faut au moins {recipe.m_amount} exemplaires (un lot de fabrication)";
+                reason = $"At least {recipe.m_amount} copies are needed (one crafting batch)";
                 return false;
             }
             if (player.IsItemEquiped(item))
             {
-                reason = "Déséquipez l'objet d'abord";
+                reason = "Unequip the item first";
                 return false;
             }
 
@@ -200,28 +220,28 @@ namespace Uncraft
             if (!StationMatches(recipe, current))
             {
                 reason = recipe.m_craftingStation != null
-                    ? "Nécessite : " + Localization.instance.Localize(recipe.m_craftingStation.m_name)
-                    : "Recette sans atelier : décraft désactivé par la configuration";
+                    ? "Requires: " + Localization.instance.Localize(recipe.m_craftingStation.m_name)
+                    : "Recipe without station: uncraft disabled by the configuration";
                 return false;
             }
-            if (recipe.m_craftingStation != null && ExigerNiveauAtelier.Value)
+            if (recipe.m_craftingStation != null && RequireStationLevel.Value)
             {
                 int required = recipe.GetRequiredStationLevel(item.m_quality);
                 if (current.GetLevel() < required)
                 {
-                    reason = $"Niveau d'atelier {required} requis";
+                    reason = $"Station level {required} required";
                     return false;
                 }
             }
             if (ComputeRefunds(recipe, item.m_quality, 1).Count == 0)
             {
-                reason = "Aucun matériau à récupérer";
+                reason = "No materials to recover";
                 return false;
             }
             return true;
         }
 
-        /// <summary>Retire les objets, rend les matériaux, joue les effets et rafraîchit le panneau.</summary>
+        /// <summary>Removes the items, returns the materials, plays the effects and refreshes the panel.</summary>
         internal static void DoUncraft(InventoryGui gui, Player player, Recipe recipe, ItemDrop.ItemData item)
         {
             Inventory inv = player.GetInventory();
@@ -256,7 +276,7 @@ namespace Uncraft
                     }
                     else
                     {
-                        // Inventaire plein : on dépose au sol devant le joueur plutôt que de perdre les matériaux.
+                        // Inventory full: drop on the ground in front of the player rather than losing the materials.
                         ItemDrop.ItemData data = refund.Item.m_itemData.Clone();
                         data.m_dropPrefab = prefab;
                         Vector3 pos = player.transform.position + player.transform.forward + Vector3.up;
@@ -273,8 +293,8 @@ namespace Uncraft
             if (station != null) station.m_craftItemDoneEffects.Create(player.transform.position, Quaternion.identity);
             else gui.m_craftItemDoneEffects.Create(player.transform.position, Quaternion.identity);
 
-            string msg = $"Décrafté : {itemName} x{removed} → {summary}";
-            if (dropped > 0) msg += $" ({dropped} déposé(s) au sol, inventaire plein)";
+            string msg = $"Uncrafted: {itemName} x{removed} → {summary}";
+            if (dropped > 0) msg += $" ({dropped} dropped on the ground, inventory full)";
             player.Message(MessageHud.MessageType.TopLeft, msg);
             Log.LogInfo(msg);
 
@@ -282,25 +302,25 @@ namespace Uncraft
         }
 
         // ------------------------------------------------------------------------------------------------
-        // Interface
+        // User interface
         // ------------------------------------------------------------------------------------------------
 
         internal static void CreateTab(InventoryGui gui)
         {
             Button source = gui.m_tabUpgrade;
-            if (source == null) { Log.LogWarning("Onglet Améliorer introuvable, onglet Décrafter non créé."); return; }
+            if (source == null) { Log.LogWarning("Upgrade tab not found, Uncraft tab not created."); return; }
 
             GameObject go = UnityEngine.Object.Instantiate(source.gameObject, source.transform.parent);
             go.name = "TabUncraft";
             TabButton = go.GetComponent<Button>();
 
-            // Remplace l'événement entier : les écouteurs persistants copiés de l'onglet Améliorer
-            // (OnTabUpgradePressed) ne peuvent pas être retirés par RemoveAllListeners.
+            // Replace the whole event: the persistent listeners copied from the Upgrade tab
+            // (OnTabUpgradePressed) cannot be removed by RemoveAllListeners.
             TabButton.onClick = new Button.ButtonClickedEvent();
             TabButton.onClick.AddListener(() => OnTabUncraftPressed(gui));
 
-            foreach (TMP_Text t in go.GetComponentsInChildren<TMP_Text>(true)) t.text = "Décrafter";
-            foreach (Text t in go.GetComponentsInChildren<Text>(true)) t.text = "Décrafter";
+            foreach (TMP_Text t in go.GetComponentsInChildren<TMP_Text>(true)) t.text = "Uncraft";
+            foreach (Text t in go.GetComponentsInChildren<Text>(true)) t.text = "Uncraft";
 
             RectTransform rt = go.transform as RectTransform;
             RectTransform srcRt = source.transform as RectTransform;
@@ -311,7 +331,7 @@ namespace Uncraft
 
             TabButton.interactable = true;
             go.SetActive(false);
-            Log.LogInfo("Onglet Décrafter créé.");
+            Log.LogInfo("Uncraft tab created.");
         }
 
         internal static void OnTabUncraftPressed(InventoryGui gui)
@@ -323,7 +343,7 @@ namespace Uncraft
             gui.UpdateCraftingPanel();
         }
 
-        /// <summary>Remplace la liste de recettes par les objets décraftables de l'inventaire.</summary>
+        /// <summary>Replaces the recipe list with the uncraftable items from the inventory.</summary>
         internal static void BuildUncraftList(InventoryGui gui)
         {
             Player player = Player.m_localPlayer;
@@ -354,7 +374,7 @@ namespace Uncraft
             gui.m_recipeListRoot.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, height);
         }
 
-        /// <summary>Affiche un matériau rendu dans un emplacement de prérequis du panneau.</summary>
+        /// <summary>Shows a returned material in one of the panel's requirement slots.</summary>
         internal static void SetupRefund(Transform root, Refund refund)
         {
             Image icon = root.Find("res_icon").GetComponent<Image>();
@@ -374,7 +394,7 @@ namespace Uncraft
             if (tooltip != null) tooltip.m_text = label;
         }
 
-        /// <summary>Repeint le panneau de droite pour l'objet sélectionné en mode décraft.</summary>
+        /// <summary>Redraws the right panel for the item selected in uncraft mode.</summary>
         internal static void UpdateUncraftPanel(InventoryGui gui, Player player)
         {
             Recipe recipe = gui.m_selectedRecipe.Recipe;
@@ -393,7 +413,7 @@ namespace Uncraft
 
             gui.m_itemCraftType.gameObject.SetActive(true);
             gui.m_itemCraftType.text = can
-                ? $"Décrafter : rend {Mathf.RoundToInt(Ratio.Value * 100f)}% des matériaux"
+                ? $"Uncraft: returns {Mathf.RoundToInt(Ratio.Value * 100f)}% of the materials"
                 : reason;
 
             List<Refund> refunds = ComputeRefunds(recipe, item.m_quality, batches);
@@ -415,7 +435,7 @@ namespace Uncraft
             }
 
             CraftingStation current = player.GetCurrentCraftingStation();
-            if (recipe.m_craftingStation != null && ExigerNiveauAtelier.Value)
+            if (recipe.m_craftingStation != null && RequireStationLevel.Value)
             {
                 int required = recipe.GetRequiredStationLevel(item.m_quality);
                 gui.m_minStationLevelIcon.gameObject.SetActive(true);
@@ -430,24 +450,24 @@ namespace Uncraft
 
             gui.m_craftButton.interactable = can;
             TMP_Text buttonText = gui.m_craftButton.GetComponentInChildren<TMP_Text>();
-            if (buttonText != null) buttonText.text = "Décrafter";
+            if (buttonText != null) buttonText.text = "Uncraft";
             UITooltip buttonTooltip = gui.m_craftButton.GetComponent<UITooltip>();
             if (buttonTooltip != null) buttonTooltip.m_text = can ? "" : reason;
         }
     }
 
-    /// <summary>Création de l'onglet au démarrage de l'interface d'inventaire.</summary>
+    /// <summary>Creates the tab when the inventory UI starts.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.Awake))]
     internal static class InventoryGui_Awake_Patch
     {
         private static void Postfix(InventoryGui __instance)
         {
             try { Plugin.CreateTab(__instance); }
-            catch (Exception e) { Plugin.Log.LogError("Création de l'onglet Décrafter échouée : " + e); }
+            catch (Exception e) { Plugin.Log.LogError("Failed to create the Uncraft tab: " + e); }
         }
     }
 
-    /// <summary>Les onglets vanilla rendent l'onglet Décrafter cliquable à nouveau.</summary>
+    /// <summary>The vanilla tabs make the Uncraft tab clickable again.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.OnTabCraftPressed))]
     internal static class InventoryGui_OnTabCraftPressed_Patch
     {
@@ -466,7 +486,7 @@ namespace Uncraft
         }
     }
 
-    /// <summary>Visibilité de l'onglet : seulement près d'un atelier. Retour à Fabriquer si l'atelier disparaît.</summary>
+    /// <summary>Tab visibility: only near a crafting station. Back to Craft if the station goes away.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateCraftingPanel))]
     internal static class InventoryGui_UpdateCraftingPanel_Patch
     {
@@ -485,7 +505,7 @@ namespace Uncraft
         }
     }
 
-    /// <summary>En mode décraft, la liste de gauche montre les objets décraftables de l'inventaire.</summary>
+    /// <summary>In uncraft mode, the left list shows the uncraftable items from the inventory.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateRecipeList))]
     internal static class InventoryGui_UpdateRecipeList_Patch
     {
@@ -497,7 +517,7 @@ namespace Uncraft
         }
     }
 
-    /// <summary>En mode décraft, le panneau de droite montre les matériaux rendus et le bouton Décrafter.</summary>
+    /// <summary>In uncraft mode, the right panel shows the materials returned and the Uncraft button.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateRecipe))]
     internal static class InventoryGui_UpdateRecipe_Patch
     {
@@ -508,7 +528,7 @@ namespace Uncraft
         }
     }
 
-    /// <summary>Clic sur le bouton : lance la barre de progression vanilla avec un décraft en attente.</summary>
+    /// <summary>Button click: starts the vanilla progress bar with a pending uncraft.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.OnCraftPressed))]
     internal static class InventoryGui_OnCraftPressed_Patch
     {
@@ -542,7 +562,7 @@ namespace Uncraft
         }
     }
 
-    /// <summary>Fin de la barre de progression : exécute le décraft à la place de la fabrication.</summary>
+    /// <summary>End of the progress bar: runs the uncraft instead of the crafting.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.DoCrafting))]
     internal static class InventoryGui_DoCrafting_Patch
     {
@@ -554,12 +574,12 @@ namespace Uncraft
             Plugin.PendingRecipe = null;
             Plugin.PendingItem = null;
             try { Plugin.DoUncraft(__instance, player, recipe, item); }
-            catch (Exception e) { Plugin.Log.LogError("Décraft échoué : " + e); }
+            catch (Exception e) { Plugin.Log.LogError("Uncraft failed: " + e); }
             return false;
         }
     }
 
-    /// <summary>Annulation ou fermeture : plus de décraft en attente.</summary>
+    /// <summary>Cancel or close: no more pending uncraft.</summary>
     [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.OnCraftCancelPressed))]
     internal static class InventoryGui_OnCraftCancelPressed_Patch
     {

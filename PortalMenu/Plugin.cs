@@ -11,39 +11,39 @@ using UnityEngine.UI;
 namespace PortalMenu
 {
     /// <summary>
-    /// Remplace l'appairage un-à-un des portails par un choix libre de la destination : interagir avec un
-    /// portail ouvre la liste de tous les portails du monde, cliquer sur une ligne téléporte.
+    /// Replaces the one-to-one pairing of portals with a free choice of destination: interacting with a
+    /// portal opens the list of every portal in the world, clicking a row teleports.
     ///
-    /// Principe : le voyage vanilla (TeleportWorld.Teleport) ne fait que lire la position du ZDO apparié puis
-    /// appeler Player.TeleportTo, qui est purement local. On garde ce dernier appel et on lui passe les
-    /// coordonnées choisies : aucune connexion ZDOExtraData.ConnectionType.Portal n'est touchée, la sauvegarde
-    /// reste du vanilla pur et désinstaller le mod laisse des portails intacts.
+    /// How it works: vanilla travel (TeleportWorld.Teleport) only reads the position of the paired ZDO, then
+    /// calls Player.TeleportTo, which is purely local. We keep that last call and pass it the chosen
+    /// coordinates: no ZDOExtraData.ConnectionType.Portal connection is touched, the save stays pure vanilla
+    /// and uninstalling the mod leaves portals intact.
     ///
-    /// Multijoueur : le registre complet des portails (ZDOMan.GetPortalList) n'existe que sur le serveur, un
-    /// client ne reçoit que les portails de ses secteurs proches. Le mod demande donc la liste au serveur par un
-    /// RPC routé. Sans le mod sur le serveur, le panneau se replie sur les portails connus localement (tous en
-    /// solo ou en hébergé, seulement les proches sur un serveur dédié) et le signale.
+    /// Multiplayer: the full portal registry (ZDOMan.GetPortalList) only exists on the server, a client only
+    /// receives the portals of its nearby sectors. The mod therefore asks the server for the list through a
+    /// routed RPC. Without the mod on the server, the panel falls back to the locally known portals (all of them
+    /// in single player or when hosting, only nearby ones on a dedicated server) and says so.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
     {
         public const string PluginGuid = "valheim.portalmenu";
         public const string PluginName = "PortalMenu";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.0.1";
 
         internal static ManualLogSource Log;
 
         internal static ConfigEntry<bool> Enabled;
-        internal static ConfigEntry<bool> PortailsSansNom;
-        internal static ConfigEntry<bool> TrierParDistance;
-        internal static ConfigEntry<bool> AutoriserTousObjets;
-        internal static ConfigEntry<float> DistanceMaximale;
-        internal static ConfigEntry<bool> AfficherBiome;
-        internal static ConfigEntry<bool> DesactiverAppairageVanilla;
-        internal static ConfigEntry<float> LargeurPanneau;
-        internal static ConfigEntry<float> HauteurPanneau;
-        internal static ConfigEntry<float> Echelle;
-        internal static ConfigEntry<string> CouleurFond;
+        internal static ConfigEntry<bool> UnnamedPortals;
+        internal static ConfigEntry<bool> SortByDistance;
+        internal static ConfigEntry<bool> AllowAllItems;
+        internal static ConfigEntry<float> MaxDistance;
+        internal static ConfigEntry<bool> ShowBiome;
+        internal static ConfigEntry<bool> DisableVanillaPairing;
+        internal static ConfigEntry<float> PanelWidth;
+        internal static ConfigEntry<float> PanelHeight;
+        internal static ConfigEntry<float> Scale;
+        internal static ConfigEntry<string> BackgroundColor;
 
         private Harmony _harmony;
 
@@ -51,58 +51,83 @@ namespace PortalMenu
         {
             Log = Logger;
 
-            // Fichier généré : BepInEx/config/valheim.portalmenu.cfg
+            // Generated file: BepInEx/config/valheim.portalmenu.cfg
             Enabled = Config.Bind("General", "Enabled", true,
-                "Active ou désactive le mod. Désactivé, les portails retrouvent leur comportement vanilla " +
-                "(appairage par nom identique).");
+                "Enables or disables the mod. When disabled, portals get their vanilla behaviour back " +
+                "(pairing by identical name).");
 
-            PortailsSansNom = Config.Bind("General", "PortailsSansNom", false,
-                "Affiche aussi les portails auxquels aucun nom n'a été donné. Pratique pour retrouver un " +
-                "portail oublié, encombrant si beaucoup de portails sont posés sans être nommés.");
+            UnnamedPortals = Config.Bind("General", "UnnamedPortals", false,
+                "Also lists portals that were never given a name. Handy to find a forgotten " +
+                "portal, cluttered if many portals are placed without being named.");
+            MigrateKey(UnnamedPortals, "General", "PortailsSansNom");
 
-            TrierParDistance = Config.Bind("General", "TrierParDistance", false,
-                "Trie la liste par distance croissante plutôt que par nom. Le bouton de tri du panneau " +
-                "permet de basculer en jeu.");
+            SortByDistance = Config.Bind("General", "SortByDistance", false,
+                "Sorts the list by increasing distance instead of by name. The panel's sort button " +
+                "toggles it in game.");
+            MigrateKey(SortByDistance, "General", "TrierParDistance");
 
-            AutoriserTousObjets = Config.Bind("General", "AutoriserTousObjets", false,
-                "Autorise le passage avec le minerai et les objets normalement interdits en portail. " +
-                "false = règle du jeu conservée.");
+            AllowAllItems = Config.Bind("General", "AllowAllItems", false,
+                "Allows travelling with ore and the items normally forbidden through portals. " +
+                "false = game rule kept.");
+            MigrateKey(AllowAllItems, "General", "AutoriserTousObjets");
 
-            DistanceMaximale = Config.Bind("General", "DistanceMaximale", 0f,
+            MaxDistance = Config.Bind("General", "MaxDistance", 0f,
                 new ConfigDescription(
-                    "Portée maximale d'un saut, en mètres. Les portails plus lointains restent affichés mais " +
-                    "grisés et non cliquables. 0 = aucune limite.",
+                    "Maximum range of a jump, in metres. Farther portals stay listed but " +
+                    "greyed out and not clickable. 0 = no limit.",
                     new AcceptableValueRange<float>(0f, 20000f)));
+            MigrateKey(MaxDistance, "General", "DistanceMaximale");
 
-            AfficherBiome = Config.Bind("General", "AfficherBiome", true,
-                "Affiche le biome de chaque destination à côté de sa distance.");
+            ShowBiome = Config.Bind("General", "ShowBiome", true,
+                "Shows the biome of each destination next to its distance.");
+            MigrateKey(ShowBiome, "General", "AfficherBiome");
 
-            DesactiverAppairageVanilla = Config.Bind("General", "DesactiverAppairageVanilla", false,
-                "Empêche le serveur d'apparier automatiquement deux portails de même nom, ce qui supprime la " +
-                "lueur « connecté » devenue trompeuse. À ne passer à true que si le mod est installé sur le " +
-                "serveur ET chez tous les joueurs : sans le mod, un joueur ne pourrait plus voyager du tout.");
+            DisableVanillaPairing = Config.Bind("General", "DisableVanillaPairing", false,
+                "Prevents the server from automatically pairing two portals with the same name, which removes the " +
+                "now misleading \"connected\" glow. Only set to true if the mod is installed on the " +
+                "server AND for every player: without the mod, a player could no longer travel at all.");
+            MigrateKey(DisableVanillaPairing, "General", "DesactiverAppairageVanilla");
 
-            LargeurPanneau = Config.Bind("Affichage", "LargeurPanneau", 460f,
-                new ConfigDescription("Largeur du panneau, en pixels d'interface (avant Echelle).",
+            PanelWidth = Config.Bind("Display", "PanelWidth", 460f,
+                new ConfigDescription("Panel width, in UI pixels (before Scale).",
                     new AcceptableValueRange<float>(300f, 1600f)));
+            MigrateKey(PanelWidth, "Affichage", "LargeurPanneau");
 
-            HauteurPanneau = Config.Bind("Affichage", "HauteurPanneau", 560f,
-                new ConfigDescription("Hauteur du panneau, en pixels d'interface (avant Echelle).",
+            PanelHeight = Config.Bind("Display", "PanelHeight", 560f,
+                new ConfigDescription("Panel height, in UI pixels (before Scale).",
                     new AcceptableValueRange<float>(240f, 1600f)));
+            MigrateKey(PanelHeight, "Affichage", "HauteurPanneau");
 
-            Echelle = Config.Bind("Affichage", "Echelle", 1f,
+            Scale = Config.Bind("Display", "Scale", 1f,
                 new ConfigDescription(
-                    "Agrandit ou réduit tout le panneau, texte compris. Il suit déjà l'échelle d'interface " +
-                    "réglée dans les options du jeu ; ceci s'y ajoute. 1.5 = moitié plus grand.",
+                    "Enlarges or shrinks the whole panel, text included. It already follows the UI scale " +
+                    "set in the game options; this is applied on top. 1.5 = half again as large.",
                     new AcceptableValueRange<float>(0.5f, 3f)));
+            MigrateKey(Scale, "Affichage", "Echelle");
 
-            CouleurFond = Config.Bind("Affichage", "CouleurFond", "17120CF2",
-                "Couleur du fond du panneau, en hexadécimal RRGGBB ou RRGGBBAA (AA = opacité, FF = opaque).");
+            BackgroundColor = Config.Bind("Display", "BackgroundColor", "17120CF2",
+                "Panel background colour, in hexadecimal RRGGBB or RRGGBBAA (AA = opacity, FF = opaque).");
+            MigrateKey(BackgroundColor, "Affichage", "CouleurFond");
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(Plugin).Assembly);
 
-            Log.LogInfo($"{PluginName} {PluginVersion} chargé.");
+            Log.LogInfo($"{PluginName} {PluginVersion} loaded.");
+        }
+
+        /// <summary>
+        /// Keeps the value of a config key renamed when the mod was translated to English: if the old key is still in the
+        /// .cfg (BepInEx keeps unbound keys as orphans), its value moves to the new entry and the old line is dropped.
+        /// </summary>
+        private void MigrateKey(ConfigEntryBase entry, string oldSection, string oldKey)
+        {
+            var old = new ConfigDefinition(oldSection, oldKey);
+            if (!Config.OrphanedEntries.TryGetValue(old, out string value)) return;
+
+            entry.SetSerializedValue(value);
+            Config.OrphanedEntries.Remove(old);
+            Config.Save();
+            Log.LogInfo($"Config key [{oldSection}] {oldKey} migrated to [{entry.Definition.Section}] {entry.Definition.Key}.");
         }
 
         private void OnDestroy()
@@ -112,15 +137,15 @@ namespace PortalMenu
         }
 
         /// <summary>
-        /// Le panneau se referme de lui-même si le joueur meurt, si le portail disparaît ou s'il s'en éloigne.
-        /// Passe par l'Update du plugin plutôt que par un patch de Player.Update.
+        /// The panel closes by itself if the player dies, if the portal disappears or if the player walks away from it.
+        /// Goes through the plugin's Update rather than a patch of Player.Update.
         /// </summary>
         private void Update()
         {
             if (DestinationPanel.IsVisible()) DestinationPanel.CheckStillValid();
         }
 
-        /// <summary>Lit une couleur « RRGGBB » ou « RRGGBBAA » de la config, avec repli sur une valeur sûre.</summary>
+        /// <summary>Reads a "RRGGBB" or "RRGGBBAA" colour from the config, falling back to a safe value.</summary>
         internal static Color ParseColor(string hex, Color fallback)
         {
             if (string.IsNullOrEmpty(hex)) return fallback;
@@ -143,9 +168,9 @@ namespace PortalMenu
         }
     }
 
-    // ================================================================== modèle
+    // ================================================================== model
 
-    /// <summary>Un portail tel que le panneau a besoin de le connaître : identité, nom, point de sortie.</summary>
+    /// <summary>A portal as the panel needs to know it: identity, name, exit point.</summary>
     internal struct PortalInfo
     {
         public ZDOID Id;
@@ -162,22 +187,22 @@ namespace PortalMenu
         }
     }
 
-    // ================================================================== réseau
+    // ================================================================== network
 
     /// <summary>
-    /// Récupération de la liste des portails. Seul le serveur tient le registre complet
-    /// (ZDOMan.m_portalObjects, alimenté secteur par secteur et envoyé aux clients dans leur rayon de vue
-    /// seulement), donc le client la lui demande par RPC routé.
+    /// Fetching the portal list. Only the server holds the full registry
+    /// (ZDOMan.m_portalObjects, filled sector by sector and sent to clients within their view range
+    /// only), so the client asks it for the list through a routed RPC.
     /// </summary>
     internal static class PortalNetwork
     {
         private const string RpcRequest = "portalmenu.Request";
         private const string RpcList = "portalmenu.List";
 
-        /// <summary>Dernière liste reçue du serveur.</summary>
+        /// <summary>Last list received from the server.</summary>
         internal static readonly List<PortalInfo> ServerList = new List<PortalInfo>();
 
-        /// <summary>Le serveur a répondu au moins une fois : il a le mod, la liste est donc complète.</summary>
+        /// <summary>The server answered at least once: it has the mod, so the list is complete.</summary>
         internal static bool ServerAnswered;
 
         internal static void Register()
@@ -193,18 +218,18 @@ namespace PortalMenu
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"Enregistrement des RPC impossible : {e.Message}");
+                Plugin.Log.LogWarning($"Could not register the RPCs: {e.Message}");
             }
         }
 
-        /// <summary>Demande la liste complète au serveur. En solo ou en hébergé, l'appel revient sur soi-même.</summary>
+        /// <summary>Asks the server for the full list. In single player or when hosting, the call comes back to ourselves.</summary>
         internal static void Request()
         {
             if (ZRoutedRpc.instance == null) return;
             ZRoutedRpc.instance.InvokeRoutedRPC(RpcRequest);
         }
 
-        /// <summary>Côté serveur : sérialise tous les portails du monde et les renvoie au demandeur.</summary>
+        /// <summary>Server side: serializes every portal in the world and sends them back to the requester.</summary>
         private static void RPC_Request(long sender)
         {
             if (ZNet.instance == null || !ZNet.instance.IsServer() || ZDOMan.instance == null) return;
@@ -229,7 +254,7 @@ namespace PortalMenu
             ZRoutedRpc.instance.InvokeRoutedRPC(sender, RpcList, pkg);
         }
 
-        /// <summary>Côté client : réception de la liste, le panneau se rafraîchit s'il est ouvert.</summary>
+        /// <summary>Client side: the list is received, the panel refreshes if it is open.</summary>
         private static void RPC_List(long sender, ZPackage pkg)
         {
             if (pkg == null) return;
@@ -250,7 +275,7 @@ namespace PortalMenu
             }
             catch (Exception e)
             {
-                Plugin.Log.LogWarning($"Liste de portails illisible : {e.Message}");
+                Plugin.Log.LogWarning($"Unreadable portal list: {e.Message}");
                 return;
             }
 
@@ -258,8 +283,8 @@ namespace PortalMenu
         }
 
         /// <summary>
-        /// Repli : les portails que cette machine connaît déjà. Tous en solo ou en hébergé (on est le serveur),
-        /// seulement ceux des secteurs chargés sur un client de serveur dédié sans le mod.
+        /// Fallback: the portals this machine already knows. All of them in single player or when hosting (we are the
+        /// server), only those of the loaded sectors on a client of a dedicated server without the mod.
         /// </summary>
         internal static List<PortalInfo> LocalSnapshot()
         {
@@ -276,24 +301,24 @@ namespace PortalMenu
         }
     }
 
-    // ================================================================== interface
+    // ================================================================== UI
 
     /// <summary>
-    /// Le panneau de choix de la destination : un fond, un titre, une liste défilante de boutons, un pied de
-    /// page. Construit à la main sous le canvas du jeu ; la police est empruntée à un texte existant plutôt
-    /// qu'embarquée, comme dans GearSlots.
+    /// The destination selection panel: a background, a title, a scrolling list of buttons, a footer.
+    /// Built by hand under the game's canvas; the font is borrowed from an existing text rather than
+    /// embedded, as in GearSlots.
     /// </summary>
     internal static class DestinationPanel
     {
         private const string RootName = "PortalMenu_Panel";
-        private const float TitreHauteur = 34f;
-        private const float AvertissementHauteur = 20f;
-        private const float PiedHauteur = 34f;
-        private const float LigneHauteur = 34f;
-        private const float Marge = 12f;
+        private const float TitleHeight = 34f;
+        private const float WarningHeight = 20f;
+        private const float FooterHeight = 34f;
+        private const float RowHeight = 34f;
+        private const float Margin = 12f;
 
-        /// <summary>Au-dessus du HUD (texte de survol, messages centraux), qui sinon passe devant le panneau.</summary>
-        private const int OrdreAffichage = 5000;
+        /// <summary>Above the HUD (hover text, center messages), which otherwise draws in front of the panel.</summary>
+        private const int SortingOrder = 5000;
 
         private static GameObject _root;
         private static RectTransform _content;
@@ -312,7 +337,7 @@ namespace PortalMenu
             return _root != null && _root.activeSelf;
         }
 
-        // -------------------------------------------------------------- cycle de vie
+        // -------------------------------------------------------------- lifecycle
 
         internal static void Show(TeleportWorld portal)
         {
@@ -321,7 +346,7 @@ namespace PortalMenu
             Transform canvas = FindCanvas();
             if (canvas == null)
             {
-                Plugin.Log.LogWarning("Canvas du jeu introuvable, panneau non affiché.");
+                Plugin.Log.LogWarning("Game canvas not found, panel not shown.");
                 return;
             }
 
@@ -333,12 +358,12 @@ namespace PortalMenu
             _root.SetActive(true);
             _root.transform.SetAsLastSibling();
 
-            // Réglé à chaque ouverture : Unity peut perdre overrideSorting posé sur un canvas encore inactif.
-            Canvas propre = _root.GetComponent<Canvas>();
-            if (propre != null)
+            // Set on every opening: Unity can lose overrideSorting when it is set on a canvas that is still inactive.
+            Canvas ownCanvas = _root.GetComponent<Canvas>();
+            if (ownCanvas != null)
             {
-                propre.overrideSorting = true;
-                propre.sortingOrder = OrdreAffichage;
+                ownCanvas.overrideSorting = true;
+                ownCanvas.sortingOrder = SortingOrder;
             }
 
             PortalNetwork.Request();
@@ -365,7 +390,7 @@ namespace PortalMenu
             _portal = null;
         }
 
-        /// <summary>Referme le panneau si le contexte n'a plus de sens (mort, portail détruit, éloignement).</summary>
+        /// <summary>Closes the panel if the context no longer makes sense (death, portal destroyed, walked away).</summary>
         internal static void CheckStillValid()
         {
             Player player = Player.m_localPlayer;
@@ -379,13 +404,13 @@ namespace PortalMenu
             if (Vector3.Distance(player.transform.position, _portal.transform.position) > range) Hide();
         }
 
-        /// <summary>La liste du serveur vient d'arriver : on redessine si le panneau est ouvert.</summary>
+        /// <summary>The server list has just arrived: redraw if the panel is open.</summary>
         internal static void OnPortalsUpdated()
         {
             if (IsVisible()) Fill();
         }
 
-        // -------------------------------------------------------------- contenu
+        // -------------------------------------------------------------- content
 
         private static void Fill()
         {
@@ -403,40 +428,40 @@ namespace PortalMenu
             foreach (PortalInfo info in source)
             {
                 if (info.Id == _portalId) continue;
-                if (!Plugin.PortailsSansNom.Value && string.IsNullOrEmpty(info.Tag.Trim())) continue;
+                if (!Plugin.UnnamedPortals.Value && string.IsNullOrEmpty(info.Tag.Trim())) continue;
                 destinations.Add(info);
             }
 
-            if (Plugin.TrierParDistance.Value)
+            if (Plugin.SortByDistance.Value)
             {
                 destinations.Sort((a, b) => Vector3.Distance(from, a.Position)
                     .CompareTo(Vector3.Distance(from, b.Position)));
             }
             else
             {
-                destinations.Sort((a, b) => string.Compare(NomAffiche(a), NomAffiche(b),
+                destinations.Sort((a, b) => string.Compare(DisplayName(a), DisplayName(b),
                     StringComparison.CurrentCultureIgnoreCase));
             }
 
             _title.text = destinations.Count > 0 ? $"Destinations ({destinations.Count})" : "Destinations";
             _hint.text = PortalNetwork.ServerAnswered
                 ? ""
-                : "Serveur sans le mod : portails proches uniquement.";
-            _sortLabel.text = Plugin.TrierParDistance.Value ? "Tri : distance" : "Tri : nom";
+                : "Server without the mod: nearby portals only.";
+            _sortLabel.text = Plugin.SortByDistance.Value ? "Sort: distance" : "Sort: name";
 
             if (destinations.Count == 0)
             {
-                AddMessageRow(Plugin.PortailsSansNom.Value
-                    ? "Aucun autre portail dans le monde."
-                    : "Aucun autre portail nommé. Nomme tes portails, ou active PortailsSansNom.");
+                AddMessageRow(Plugin.UnnamedPortals.Value
+                    ? "No other portal in the world."
+                    : "No other named portal. Name your portals, or enable UnnamedPortals.");
             }
             else
             {
-                float limite = Plugin.DistanceMaximale.Value;
+                float limit = Plugin.MaxDistance.Value;
                 foreach (PortalInfo info in destinations)
                 {
                     float distance = Vector3.Distance(from, info.Position);
-                    AddPortalRow(info, distance, limite <= 0f || distance <= limite);
+                    AddPortalRow(info, distance, limit <= 0f || distance <= limit);
                 }
             }
 
@@ -453,46 +478,46 @@ namespace PortalMenu
             _rows.Clear();
         }
 
-        private static string NomAffiche(PortalInfo info)
+        private static string DisplayName(PortalInfo info)
         {
             string tag = info.Tag != null ? info.Tag.Trim() : "";
-            return string.IsNullOrEmpty(tag) ? "(sans nom)" : tag.RemoveRichTextTags();
+            return string.IsNullOrEmpty(tag) ? "(unnamed)" : tag.RemoveRichTextTags();
         }
 
         private static string Detail(PortalInfo info, float distance)
         {
-            string distanceTexte = distance >= 1000f
+            string distanceText = distance >= 1000f
                 ? (distance / 1000f).ToString("0.0") + " km"
                 : distance.ToString("0") + " m";
 
-            if (!Plugin.AfficherBiome.Value || WorldGenerator.instance == null) return distanceTexte;
+            if (!Plugin.ShowBiome.Value || WorldGenerator.instance == null) return distanceText;
 
             Heightmap.Biome biome = WorldGenerator.instance.GetBiome(info.Position);
-            string nomBiome = Localization.instance.Localize("$biome_" + biome.ToString().ToLower());
-            return nomBiome + "   " + distanceTexte;
+            string biomeName = Localization.instance.Localize("$biome_" + biome.ToString().ToLower());
+            return biomeName + "   " + distanceText;
         }
 
-        private static void AddPortalRow(PortalInfo info, float distance, bool joignable)
+        private static void AddPortalRow(PortalInfo info, float distance, bool reachable)
         {
             RectTransform rect = NewRect("row", _content);
-            var fond = rect.gameObject.AddComponent<Image>();
-            fond.color = new Color(1f, 1f, 1f, 0.05f);
+            var background = rect.gameObject.AddComponent<Image>();
+            background.color = new Color(1f, 1f, 1f, 0.05f);
 
             var layout = rect.gameObject.AddComponent<LayoutElement>();
-            layout.preferredHeight = LigneHauteur;
-            layout.minHeight = LigneHauteur;
+            layout.preferredHeight = RowHeight;
+            layout.minHeight = RowHeight;
 
-            TMP_Text nom = NewText(rect, "nom", NomAffiche(info), 17f, TextAlignmentOptions.Left);
-            Stretch(nom.rectTransform, 10f, 200f, 0f, 0f);
-            nom.color = joignable ? new Color(0.95f, 0.91f, 0.82f) : new Color(0.55f, 0.52f, 0.48f);
+            TMP_Text name = NewText(rect, "name", DisplayName(info), 17f, TextAlignmentOptions.Left);
+            Stretch(name.rectTransform, 10f, 200f, 0f, 0f);
+            name.color = reachable ? new Color(0.95f, 0.91f, 0.82f) : new Color(0.55f, 0.52f, 0.48f);
 
             TMP_Text detail = NewText(rect, "detail", Detail(info, distance), 14f, TextAlignmentOptions.Right);
             Stretch(detail.rectTransform, 10f, 10f, 0f, 0f);
-            detail.color = joignable ? new Color(0.72f, 0.68f, 0.58f) : new Color(0.45f, 0.42f, 0.4f);
+            detail.color = reachable ? new Color(0.72f, 0.68f, 0.58f) : new Color(0.45f, 0.42f, 0.4f);
 
             var button = rect.gameObject.AddComponent<Button>();
-            button.targetGraphic = fond;
-            button.interactable = joignable;
+            button.targetGraphic = background;
+            button.interactable = reachable;
 
             ColorBlock colors = button.colors;
             colors.normalColor = Color.white;
@@ -502,8 +527,8 @@ namespace PortalMenu
             colors.fadeDuration = 0.08f;
             button.colors = colors;
 
-            PortalInfo cible = info;
-            button.onClick.AddListener(delegate { TravelTo(cible); });
+            PortalInfo target = info;
+            button.onClick.AddListener(delegate { TravelTo(target); });
 
             _rows.Add(rect.gameObject);
         }
@@ -512,23 +537,23 @@ namespace PortalMenu
         {
             RectTransform rect = NewRect("message", _content);
             var layout = rect.gameObject.AddComponent<LayoutElement>();
-            layout.preferredHeight = LigneHauteur * 2f;
-            layout.minHeight = LigneHauteur * 2f;
+            layout.preferredHeight = RowHeight * 2f;
+            layout.minHeight = RowHeight * 2f;
 
-            TMP_Text texte = NewText(rect, "texte", message, 15f, TextAlignmentOptions.Center);
-            Stretch(texte.rectTransform, 10f, 10f, 0f, 0f);
-            texte.color = new Color(0.7f, 0.66f, 0.58f);
-            texte.textWrappingMode = TextWrappingModes.Normal;
-            texte.overflowMode = TextOverflowModes.Overflow;
+            TMP_Text text = NewText(rect, "text", message, 15f, TextAlignmentOptions.Center);
+            Stretch(text.rectTransform, 10f, 10f, 0f, 0f);
+            text.color = new Color(0.7f, 0.66f, 0.58f);
+            text.textWrappingMode = TextWrappingModes.Normal;
+            text.overflowMode = TextOverflowModes.Overflow;
 
             _rows.Add(rect.gameObject);
         }
 
-        // -------------------------------------------------------------- voyage
+        // -------------------------------------------------------------- travel
 
         /// <summary>
-        /// Reprend les garde-fous de TeleportWorld.Teleport à l'identique, puis téléporte vers les coordonnées
-        /// choisies au lieu de celles du portail apparié.
+        /// Applies the same safeguards as TeleportWorld.Teleport, then teleports to the chosen coordinates
+        /// instead of those of the paired portal.
         /// </summary>
         private static void TravelTo(PortalInfo target)
         {
@@ -552,23 +577,23 @@ namespace PortalMenu
                 return;
             }
 
-            if (!player.IsTeleportable(Plugin.AutoriserTousObjets.Value || portal.m_allowAllItems))
+            if (!player.IsTeleportable(Plugin.AllowAllItems.Value || portal.m_allowAllItems))
             {
                 player.Message(MessageHud.MessageType.Center, "$msg_noteleport");
                 Hide();
                 return;
             }
 
-            Vector3 sortie = target.Position
-                             + target.Rotation * Vector3.forward * portal.m_exitDistance
-                             + Vector3.up;
+            Vector3 exit = target.Position
+                           + target.Rotation * Vector3.forward * portal.m_exitDistance
+                           + Vector3.up;
 
             Hide();
-            player.TeleportTo(sortie, target.Rotation, distantTeleport: true);
+            player.TeleportTo(exit, target.Rotation, distantTeleport: true);
             if (Game.instance != null) Game.instance.IncrementPlayerStat(PlayerStatType.PortalsUsed);
         }
 
-        /// <summary>Renommer passe par le TextInput du jeu, TeleportWorld étant déjà un TextReceiver.</summary>
+        /// <summary>Renaming goes through the game's TextInput, TeleportWorld already being a TextReceiver.</summary>
         private static void Rename()
         {
             TeleportWorld portal = _portal;
@@ -586,11 +611,11 @@ namespace PortalMenu
 
         private static void ToggleSort()
         {
-            Plugin.TrierParDistance.Value = !Plugin.TrierParDistance.Value;
+            Plugin.SortByDistance.Value = !Plugin.SortByDistance.Value;
             Fill();
         }
 
-        // -------------------------------------------------------------- construction
+        // -------------------------------------------------------------- building
 
         private static bool Build(Transform canvas)
         {
@@ -605,7 +630,7 @@ namespace PortalMenu
             _font = FindFont(canvas);
             if (_font == null)
             {
-                Plugin.Log.LogWarning("Police du jeu introuvable, panneau non affiché.");
+                Plugin.Log.LogWarning("Game font not found, panel not shown.");
                 return false;
             }
 
@@ -616,45 +641,45 @@ namespace PortalMenu
             root.pivot = new Vector2(0.5f, 0.5f);
             root.anchoredPosition = Vector2.zero;
 
-            // Canvas propre : dessiné au-dessus du HUD et cliquable quel que soit l'ordre des canvas du jeu.
-            // Le CanvasGroup ignore ceux des parents, dont l'opacité rendait le panneau translucide.
+            // Own canvas: drawn above the HUD and clickable whatever the order of the game's canvases.
+            // The CanvasGroup ignores those of the parents, whose opacity made the panel translucent.
             _root.AddComponent<Canvas>();
             _root.AddComponent<GraphicRaycaster>();
-            var groupe = _root.AddComponent<CanvasGroup>();
-            groupe.ignoreParentGroups = true;
-            groupe.alpha = 1f;
-            groupe.interactable = true;
-            groupe.blocksRaycasts = true;
+            var group = _root.AddComponent<CanvasGroup>();
+            group.ignoreParentGroups = true;
+            group.alpha = 1f;
+            group.interactable = true;
+            group.blocksRaycasts = true;
 
-            var fond = _root.AddComponent<Image>();
-            fond.color = Plugin.ParseColor(Plugin.CouleurFond.Value, new Color(0.09f, 0.07f, 0.05f, 0.95f));
+            var background = _root.AddComponent<Image>();
+            background.color = Plugin.ParseColor(Plugin.BackgroundColor.Value, new Color(0.09f, 0.07f, 0.05f, 0.95f));
 
-            // Titre
-            _title = NewText(root, "titre", "Destinations", 22f, TextAlignmentOptions.Left);
-            RectTransform titre = _title.rectTransform;
-            titre.anchorMin = new Vector2(0f, 1f);
-            titre.anchorMax = new Vector2(1f, 1f);
-            titre.pivot = new Vector2(0.5f, 1f);
-            titre.sizeDelta = new Vector2(-2f * Marge, TitreHauteur);
-            titre.anchoredPosition = new Vector2(0f, -Marge * 0.5f);
+            // Title
+            _title = NewText(root, "title", "Destinations", 22f, TextAlignmentOptions.Left);
+            RectTransform title = _title.rectTransform;
+            title.anchorMin = new Vector2(0f, 1f);
+            title.anchorMax = new Vector2(1f, 1f);
+            title.pivot = new Vector2(0.5f, 1f);
+            title.sizeDelta = new Vector2(-2f * Margin, TitleHeight);
+            title.anchoredPosition = new Vector2(0f, -Margin * 0.5f);
             _title.color = new Color(1f, 0.94f, 0.8f);
 
-            // Avertissement affiché quand le serveur n'a pas le mod
-            _hint = NewText(root, "avertissement", "", 13f, TextAlignmentOptions.Left);
+            // Warning shown when the server does not have the mod
+            _hint = NewText(root, "warning", "", 13f, TextAlignmentOptions.Left);
             RectTransform hint = _hint.rectTransform;
             hint.anchorMin = new Vector2(0f, 1f);
             hint.anchorMax = new Vector2(1f, 1f);
             hint.pivot = new Vector2(0.5f, 1f);
-            hint.sizeDelta = new Vector2(-2f * Marge, AvertissementHauteur);
-            hint.anchoredPosition = new Vector2(0f, -Marge * 0.5f - TitreHauteur);
+            hint.sizeDelta = new Vector2(-2f * Margin, WarningHeight);
+            hint.anchoredPosition = new Vector2(0f, -Margin * 0.5f - TitleHeight);
             _hint.color = new Color(0.9f, 0.72f, 0.4f);
 
-            // Zone défilante
+            // Scrolling area
             RectTransform viewport = NewRect("viewport", root);
-            Stretch(viewport, Marge, Marge, Marge * 0.5f + TitreHauteur + AvertissementHauteur + 4f,
-                Marge + PiedHauteur + 8f);
-            var masque = viewport.gameObject.AddComponent<Image>();
-            masque.color = new Color(0f, 0f, 0f, 0.25f);
+            Stretch(viewport, Margin, Margin, Margin * 0.5f + TitleHeight + WarningHeight + 4f,
+                Margin + FooterHeight + 8f);
+            var mask = viewport.gameObject.AddComponent<Image>();
+            mask.color = new Color(0f, 0f, 0f, 0.25f);
             viewport.gameObject.AddComponent<RectMask2D>();
 
             _content = NewRect("content", viewport);
@@ -664,16 +689,16 @@ namespace PortalMenu
             _content.anchoredPosition = Vector2.zero;
             _content.sizeDelta = Vector2.zero;
 
-            var pile = _content.gameObject.AddComponent<VerticalLayoutGroup>();
-            pile.spacing = 2f;
-            pile.padding = new RectOffset(4, 4, 4, 4);
-            pile.childForceExpandWidth = true;
-            pile.childForceExpandHeight = false;
-            pile.childControlWidth = true;
-            pile.childControlHeight = true;
+            var stack = _content.gameObject.AddComponent<VerticalLayoutGroup>();
+            stack.spacing = 2f;
+            stack.padding = new RectOffset(4, 4, 4, 4);
+            stack.childForceExpandWidth = true;
+            stack.childForceExpandHeight = false;
+            stack.childControlWidth = true;
+            stack.childControlHeight = true;
 
-            var ajusteur = _content.gameObject.AddComponent<ContentSizeFitter>();
-            ajusteur.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            var fitter = _content.gameObject.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             _scroll = viewport.gameObject.AddComponent<ScrollRect>();
             _scroll.viewport = viewport;
@@ -683,24 +708,24 @@ namespace PortalMenu
             _scroll.movementType = ScrollRect.MovementType.Clamped;
             _scroll.scrollSensitivity = 28f;
 
-            // Pied de page : trois boutons de largeur égale, pour suivre la largeur configurée du panneau
-            RectTransform pied = NewRect("pied", root);
-            pied.anchorMin = new Vector2(0f, 0f);
-            pied.anchorMax = new Vector2(1f, 0f);
-            pied.pivot = new Vector2(0.5f, 0f);
-            pied.sizeDelta = new Vector2(-2f * Marge, PiedHauteur);
-            pied.anchoredPosition = new Vector2(0f, Marge * 0.5f);
+            // Footer: three buttons of equal width, to follow the configured panel width
+            RectTransform footer = NewRect("footer", root);
+            footer.anchorMin = new Vector2(0f, 0f);
+            footer.anchorMax = new Vector2(1f, 0f);
+            footer.pivot = new Vector2(0.5f, 0f);
+            footer.sizeDelta = new Vector2(-2f * Margin, FooterHeight);
+            footer.anchoredPosition = new Vector2(0f, Margin * 0.5f);
 
-            var rangee = pied.gameObject.AddComponent<HorizontalLayoutGroup>();
-            rangee.spacing = 8f;
-            rangee.childForceExpandWidth = true;
-            rangee.childForceExpandHeight = true;
-            rangee.childControlWidth = true;
-            rangee.childControlHeight = true;
+            var buttonRow = footer.gameObject.AddComponent<HorizontalLayoutGroup>();
+            buttonRow.spacing = 8f;
+            buttonRow.childForceExpandWidth = true;
+            buttonRow.childForceExpandHeight = true;
+            buttonRow.childControlWidth = true;
+            buttonRow.childControlHeight = true;
 
-            _sortLabel = NewFooterButton(pied, "tri", "Tri : nom", ToggleSort);
-            NewFooterButton(pied, "renommer", "Renommer", Rename);
-            NewFooterButton(pied, "fermer", "Fermer", Hide);
+            _sortLabel = NewFooterButton(footer, "sort", "Sort: name", ToggleSort);
+            NewFooterButton(footer, "rename", "Rename", Rename);
+            NewFooterButton(footer, "close", "Close", Hide);
 
             ApplySize();
             return true;
@@ -710,8 +735,8 @@ namespace PortalMenu
         {
             if (_root == null) return;
             ((RectTransform)_root.transform).sizeDelta =
-                new Vector2(Plugin.LargeurPanneau.Value, Plugin.HauteurPanneau.Value);
-            _root.transform.localScale = Vector3.one * Plugin.Echelle.Value;
+                new Vector2(Plugin.PanelWidth.Value, Plugin.PanelHeight.Value);
+            _root.transform.localScale = Vector3.one * Plugin.Scale.Value;
         }
 
         private static TMP_Text NewFooterButton(RectTransform parent, string name, string label,
@@ -720,15 +745,15 @@ namespace PortalMenu
             RectTransform rect = NewRect(name, parent);
             rect.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
 
-            var fond = rect.gameObject.AddComponent<Image>();
-            fond.color = new Color(1f, 1f, 1f, 0.09f);
+            var background = rect.gameObject.AddComponent<Image>();
+            background.color = new Color(1f, 1f, 1f, 0.09f);
 
-            TMP_Text texte = NewText(rect, "libelle", label, 16f, TextAlignmentOptions.Center);
-            Stretch(texte.rectTransform, 0f, 0f, 0f, 0f);
-            texte.color = new Color(0.95f, 0.91f, 0.82f);
+            TMP_Text text = NewText(rect, "label", label, 16f, TextAlignmentOptions.Center);
+            Stretch(text.rectTransform, 0f, 0f, 0f, 0f);
+            text.color = new Color(0.95f, 0.91f, 0.82f);
 
             var button = rect.gameObject.AddComponent<Button>();
-            button.targetGraphic = fond;
+            button.targetGraphic = background;
 
             ColorBlock colors = button.colors;
             colors.highlightedColor = new Color(1f, 0.92f, 0.7f, 1f);
@@ -737,7 +762,7 @@ namespace PortalMenu
             button.colors = colors;
 
             button.onClick.AddListener(action);
-            return texte;
+            return text;
         }
 
         private static RectTransform NewRect(string name, Transform parent)
@@ -749,46 +774,46 @@ namespace PortalMenu
             return rect;
         }
 
-        private static TMP_Text NewText(RectTransform parent, string name, string contenu, float taille,
-            TextAlignmentOptions alignement)
+        private static TMP_Text NewText(RectTransform parent, string name, string content, float size,
+            TextAlignmentOptions alignment)
         {
             RectTransform rect = NewRect(name, parent);
-            var texte = rect.gameObject.AddComponent<TextMeshProUGUI>();
-            texte.font = _font;
-            texte.fontSize = taille;
-            texte.text = contenu;
-            texte.alignment = alignement;
-            texte.raycastTarget = false;
-            texte.textWrappingMode = TextWrappingModes.NoWrap;
-            texte.overflowMode = TextOverflowModes.Ellipsis;
+            var text = rect.gameObject.AddComponent<TextMeshProUGUI>();
+            text.font = _font;
+            text.fontSize = size;
+            text.text = content;
+            text.alignment = alignment;
+            text.raycastTarget = false;
+            text.textWrappingMode = TextWrappingModes.NoWrap;
+            text.overflowMode = TextOverflowModes.Ellipsis;
             Stretch(rect, 0f, 0f, 0f, 0f);
-            return texte;
+            return text;
         }
 
-        private static void Stretch(RectTransform rect, float gauche, float droite, float haut, float bas)
+        private static void Stretch(RectTransform rect, float left, float right, float top, float bottom)
         {
             rect.anchorMin = new Vector2(0f, 0f);
             rect.anchorMax = new Vector2(1f, 1f);
-            rect.offsetMin = new Vector2(gauche, bas);
-            rect.offsetMax = new Vector2(-droite, -haut);
+            rect.offsetMin = new Vector2(left, bottom);
+            rect.offsetMax = new Vector2(-right, -top);
         }
 
-        /// <summary>Canvas du jeu, atteint depuis une GUI toujours présente en partie.</summary>
+        /// <summary>The game's canvas, reached from a GUI that is always present during a game session.</summary>
         private static Transform FindCanvas()
         {
-            Component ancre = null;
-            if (StoreGui.instance != null) ancre = StoreGui.instance;
-            else if (InventoryGui.instance != null) ancre = InventoryGui.instance;
-            else if (Hud.instance != null) ancre = Hud.instance;
-            if (ancre == null) return null;
+            Component anchor = null;
+            if (StoreGui.instance != null) anchor = StoreGui.instance;
+            else if (InventoryGui.instance != null) anchor = InventoryGui.instance;
+            else if (Hud.instance != null) anchor = Hud.instance;
+            if (anchor == null) return null;
 
-            Canvas canvas = ancre.GetComponentInParent<Canvas>();
+            Canvas canvas = anchor.GetComponentInParent<Canvas>();
             return canvas != null ? canvas.transform : null;
         }
 
         /// <summary>
-        /// Police empruntée à un texte du jeu, pour ne pas embarquer d'asset. On vise la police serif du texte de
-        /// survol : prendre le premier texte venu du canvas tombait sur une police pixel illisible.
+        /// Font borrowed from a game text, to avoid embedding an asset. We target the serif font of the hover
+        /// text: taking the first text found in the canvas ended up on an unreadable pixel font.
         /// </summary>
         private static TMP_FontAsset FindFont(Transform canvas)
         {
@@ -799,23 +824,23 @@ namespace PortalMenu
                 && InventoryGui.instance.m_recipeName.font != null)
                 return InventoryGui.instance.m_recipeName.font;
 
-            // Repli : la police la plus utilisée du canvas, qui est celle du jeu et pas une police de debug.
+            // Fallback: the most used font in the canvas, which is the game's and not a debug font.
             var usages = new Dictionary<TMP_FontAsset, int>();
-            TMP_FontAsset meilleure = null;
-            foreach (TMP_Text texte in canvas.GetComponentsInChildren<TMP_Text>(includeInactive: true))
+            TMP_FontAsset best = null;
+            foreach (TMP_Text text in canvas.GetComponentsInChildren<TMP_Text>(includeInactive: true))
             {
-                if (texte == null || texte.font == null) continue;
-                usages.TryGetValue(texte.font, out int n);
-                usages[texte.font] = ++n;
-                if (meilleure == null || n > usages[meilleure]) meilleure = texte.font;
+                if (text == null || text.font == null) continue;
+                usages.TryGetValue(text.font, out int n);
+                usages[text.font] = ++n;
+                if (best == null || n > usages[best]) best = text.font;
             }
-            return meilleure;
+            return best;
         }
     }
 
-    // ================================================================== patchs
+    // ================================================================== patches
 
-    /// <summary>Le jeu enregistre ses RPC routés dans Game.Start : on y ajoute les nôtres.</summary>
+    /// <summary>The game registers its routed RPCs in Game.Start: we add ours there.</summary>
     [HarmonyPatch(typeof(Game), nameof(Game.Start))]
     internal static class Game_Start_Patch
     {
@@ -825,7 +850,7 @@ namespace PortalMenu
         }
     }
 
-    /// <summary>Interagir avec un portail ouvre la liste des destinations au lieu du champ de nom.</summary>
+    /// <summary>Interacting with a portal opens the destination list instead of the name field.</summary>
     [HarmonyPatch(typeof(TeleportWorld), nameof(TeleportWorld.Interact))]
     internal static class TeleportWorld_Interact_Patch
     {
@@ -845,7 +870,7 @@ namespace PortalMenu
         }
     }
 
-    /// <summary>Le survol annonce le choix de destination, plus l'appairage par nom.</summary>
+    /// <summary>The hover text announces the destination choice, no longer the pairing by name.</summary>
     [HarmonyPatch(typeof(TeleportWorld), nameof(TeleportWorld.GetHoverText))]
     internal static class TeleportWorld_GetHoverText_Patch
     {
@@ -857,19 +882,19 @@ namespace PortalMenu
             if (zdo == null) return true;
 
             string tag = zdo.GetString(ZDOVars.s_tag) ?? "";
-            string nom = string.IsNullOrEmpty(tag.Trim()) ? "" : tag.RemoveRichTextTags();
+            string name = string.IsNullOrEmpty(tag.Trim()) ? "" : tag.RemoveRichTextTags();
 
             __result = Localization.instance.Localize(
-                "$piece_portal $piece_portal_tag:\"" + nom + "\"\n" +
-                "[<color=yellow><b>$KEY_Use</b></color>] Choisir une destination");
+                "$piece_portal $piece_portal_tag:\"" + name + "\"\n" +
+                "[<color=yellow><b>$KEY_Use</b></color>] Choose a destination");
             return false;
         }
     }
 
     /// <summary>
-    /// Panneau ouvert : ni déplacement, ni saut, ni attaque, ni rotation de la caméra. C'est PlayerController
-    /// qui lit le clavier et la souris (FixedUpdate pour les déplacements, LateUpdate pour le regard) ; le
-    /// TakeInput de Player, patché plus bas, ne couvre que l'interaction et la barre d'action.
+    /// Panel open: no movement, no jumping, no attacking, no camera rotation. PlayerController is the one
+    /// reading keyboard and mouse (FixedUpdate for movement, LateUpdate for looking around); Player's
+    /// TakeInput, patched below, only covers interaction and the hotbar.
     /// </summary>
     [HarmonyPatch(typeof(PlayerController), "TakeInput")]
     internal static class PlayerController_TakeInput_Patch
@@ -880,7 +905,7 @@ namespace PortalMenu
         }
     }
 
-    /// <summary>Panneau ouvert : le joueur n'interagit plus et n'utilise plus sa barre d'action.</summary>
+    /// <summary>Panel open: the player no longer interacts nor uses the hotbar.</summary>
     [HarmonyPatch(typeof(Player), "TakeInput")]
     internal static class Player_TakeInput_Patch
     {
@@ -890,7 +915,7 @@ namespace PortalMenu
         }
     }
 
-    /// <summary>Panneau ouvert : le curseur est libéré, la caméra ne suit plus la souris.</summary>
+    /// <summary>Panel open: the cursor is released, the camera no longer follows the mouse.</summary>
     [HarmonyPatch(typeof(GameCamera), nameof(GameCamera.UpdateMouseCapture))]
     internal static class GameCamera_UpdateMouseCapture_Patch
     {
@@ -904,7 +929,7 @@ namespace PortalMenu
         }
     }
 
-    /// <summary>Échap referme le panneau au lieu d'ouvrir le menu du jeu.</summary>
+    /// <summary>Escape closes the panel instead of opening the game menu.</summary>
     [HarmonyPatch(typeof(Menu), "Update")]
     internal static class Menu_Update_Patch
     {
@@ -922,15 +947,15 @@ namespace PortalMenu
     }
 
     /// <summary>
-    /// Option : empêche le serveur d'apparier deux portails de même nom, la lueur « connecté » n'ayant plus de
-    /// sens quand la destination se choisit à la main.
+    /// Option: prevents the server from pairing two portals with the same name, the "connected" glow no longer
+    /// making sense when the destination is chosen by hand.
     /// </summary>
     [HarmonyPatch(typeof(Game), nameof(Game.ConnectPortals))]
     internal static class Game_ConnectPortals_Patch
     {
         private static bool Prefix()
         {
-            return !Plugin.Enabled.Value || !Plugin.DesactiverAppairageVanilla.Value;
+            return !Plugin.Enabled.Value || !Plugin.DisableVanillaPairing.Value;
         }
     }
 }
