@@ -12,9 +12,17 @@ Valheim fermé, dans PowerShell :
 irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install.ps1 | iex
 ```
 
-Le script trouve Valheim dans les bibliothèques Steam, installe BepInExPack Valheim (Thunderstore) s'il manque,
-télécharge `valheim-modpack.zip` depuis la dernière release et copie chaque mod dans `BepInEx/plugins/<Mod>/`.
-Les autres mods et les fichiers `.cfg` ne sont pas touchés. Relancer la même commande met à jour.
+Le script trouve Valheim dans les bibliothèques Steam (ou demande son dossier), puis affiche un menu qui se parcourt
+avec les flèches :
+
+- **Install or update mods** : une case à cocher par mod de la dernière release, avec sa version et sa description.
+  Espace coche ou décoche, Entrée valide. Les mods déjà installés sont cochés, donc relancer la commande met à jour
+  la même sélection ; décocher un mod installé le retire. BepInExPack Valheim (Thunderstore) est installé s'il manque,
+  et chaque mod coché est copié dans `BepInEx/plugins/<Mod>/`.
+- **Uninstall** : une case par mod du modpack installé, puis s'il faut supprimer leurs réglages (`.cfg`) et retirer
+  BepInEx lui-même, ce qui rend un dossier de jeu vanilla.
+
+Les mods installés par ailleurs ne sont jamais touchés, et les fichiers `.cfg` ne sont supprimés que sur demande.
 
 ## Installer (serveur dédié)
 
@@ -24,21 +32,27 @@ Serveur arrêté, sur la machine Windows qui l'héberge :
 irm https://raw.githubusercontent.com/KiraFR/valheim-modpack/main/install-server.ps1 | iex
 ```
 
-Mêmes étapes, mais dans le dossier `Valheim dedicated server` des bibliothèques Steam, et seulement avec les mods
-utiles côté serveur (`StackMax`, `PortalMenu`, `QuickBrew`). Un serveur installé ailleurs, par exemple avec SteamCMD,
-demande `-ServerPath`. Les serveurs Linux et les hébergeurs sans accès PowerShell demandent une copie manuelle de
-l'archive.
+Mêmes menus, mais dans le dossier `Valheim dedicated server` des bibliothèques Steam, et le menu d'installation ne
+propose que les mods utiles côté serveur (`StackMax`, `PortalMenu`, `QuickBrew`). Les serveurs Linux et les
+hébergeurs sans accès PowerShell demandent une copie manuelle de l'archive.
 
 ## Paramètres des scripts
 
-Via `& ([scriptblock]::Create((irm <url>))) <paramètres>` ou `powershell -ExecutionPolicy Bypass -File <script> <paramètres>` :
+Via `& ([scriptblock]::Create((irm <url>))) <paramètres>` ou `powershell -ExecutionPolicy Bypass -File <script> <paramètres>`.
+`-Mods`, `-Uninstall` et `-BepInExOnly` sautent les menus, tout comme un lancement hors console interactive (CI,
+entrée redirigée) : les paramètres décident, et par défaut tous les mods sont installés (tous les mods serveur pour
+`install-server.ps1`).
 
 | Paramètre | Effet |
 |---|---|
 | `-ValheimPath <dossier>` (`install.ps1`) | Dossier du jeu, si la détection Steam échoue. |
 | `-ServerPath <dossier>` (`install-server.ps1`) | Dossier du serveur dédié (celui de `valheim_server.exe`), si la détection Steam échoue. |
-| `-Version v1.2.0` | Installe une release précise au lieu de la dernière. |
-| `-ZipPath <zip>` | Installe depuis une archive locale. |
+| `-Mods StackMax, ChestCraft` | N'installe que ces mods (ou ne désinstalle que ceux-là avec `-Uninstall`). |
+| `-Uninstall` | Désinstalle tous les mods du modpack installés, ou seulement `-Mods`. |
+| `-RemoveConfig` | Avec `-Uninstall` : supprime aussi les réglages des mods désinstallés (`BepInEx/config/valheim.<mod>.*`). |
+| `-RemoveBepInEx` | Avec `-Uninstall` : retire aussi BepInEx, avec tous les autres mods et réglages BepInEx du dossier. |
+| `-Version v1.2.0` | Utilise une release précise au lieu de la dernière. |
+| `-ZipPath <zip>` | Utilise une archive locale. |
 | `-BepInExOnly`, `-ForceBepInEx` | N'installe que BepInEx ; réinstalle BepInEx même s'il est présent. |
 
 Chaque script refuse le dossier de l'autre (dossier du jeu pour le script serveur, dossier serveur pour le script du jeu).
@@ -53,7 +67,8 @@ buildid Steam du serveur : les 2 Go du serveur ne sont retéléchargés qu'aprè
 build indique la version du jeu contre laquelle les mods ont été compilés. Elle produit l'artefact
 `valheim-modpack.zip` (`BepInEx/plugins/<Mod>/<Mod>.dll` pour chaque projet de la solution) et vérifie que les deux
 scripts installent cette archive dans des dossiers vierges (tous les mods pour le jeu, exactement les mods serveur
-pour le serveur).
+pour le serveur), puis teste `-Mods`, `-Uninstall`, `-RemoveConfig` et `-RemoveBepInEx`. Une première étape vérifie
+que le bloc de fonctions partagé par les deux scripts est identique dans les deux et qu'ils sont en ASCII.
 
 Publier une release : `git tag v1.0.0 && git push origin v1.0.0`. C'est cette release que les deux scripts téléchargent.
 

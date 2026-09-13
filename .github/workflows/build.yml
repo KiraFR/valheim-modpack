@@ -22,6 +22,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Both install scripts run alone through irm | iex, so they share their functions by copy between markers.
+      # They must also stay ASCII without BOM: Windows PowerShell 5.1 reads them with a legacy code page.
+      - name: Check install scripts (shared block, ASCII)
+        shell: pwsh
+        run: |
+          $pattern = '(?s)# ===== BEGIN SHARED BLOCK.*?# ===== END SHARED BLOCK ====='
+          $blocks = foreach ($script in 'install.ps1', 'install-server.ps1') {
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path $script))
+            if (@($bytes | Where-Object { $_ -gt 127 }).Count -gt 0) { throw "$script contains non-ASCII characters." }
+            $match = [regex]::Match([Text.Encoding]::ASCII.GetString($bytes), $pattern)
+            if (-not $match.Success) { throw "Shared block markers not found in $script." }
+            $match.Value -replace "`r`n", "`n"
+          }
+          if ($blocks[0] -cne $blocks[1]) {
+            throw 'The shared block differs between install.ps1 and install-server.ps1: make the change in both files.'
+          }
+          Write-Host 'Shared block identical, both scripts ASCII'
+
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 9.0.x
@@ -119,36 +137,69 @@ jobs:
           }
           Compress-Archive -Path "$package\*" -DestinationPath valheim-modpack.zip -Force
 
-      - name: Test installs into empty folders
+      # The CI environment variable makes both scripts non-interactive: no menu, the parameters decide.
+      - name: Test install scripts
         shell: pwsh
         run: |
-          function Test-Install([string]$script, [string]$pathParameter, [string[]]$mods) {
-            $folder = Join-Path $env:RUNNER_TEMP "test-$([IO.Path]::GetFileNameWithoutExtension($script))"
-            New-Item -ItemType Directory -Force $folder | Out-Null
-            $arguments = @{ $pathParameter = $folder; ZipPath = 'valheim-modpack.zip' }
-            & "./$script" @arguments
-            foreach ($file in @('BepInEx\core\BepInEx.dll', 'winhttp.dll')) {
-              if (-not (Test-Path (Join-Path $folder $file))) { throw "${script}: missing after install: $file" }
-            }
-            $installed = @(Get-ChildItem (Join-Path $folder 'BepInEx\plugins') -Directory | ForEach-Object Name | Sort-Object)
-            $wanted = @($mods | Sort-Object)
-            if (($installed -join ',') -ne ($wanted -join ',')) {
-              throw "${script}: installed [$($installed -join ', ')], expected [$($wanted -join ', ')]"
-            }
-            foreach ($mod in $mods) {
-              if (-not (Test-Path (Join-Path $folder "BepInEx\plugins\$mod\$mod.dll"))) { throw "${script}: missing $mod.dll" }
-            }
-            Write-Host "${script} verified: $($mods -join ', ')"
-          }
-
-          $allMods = @(Get-ChildItem "$env:RUNNER_TEMP\package\BepInEx\plugins" -Directory | ForEach-Object Name)
+          $zip = (Resolve-Path 'valheim-modpack.zip').Path
+          $allMods = (Get-ChildItem "$env:RUNNER_TEMP\package\BepInEx\plugins" -Directory | ForEach-Object Name | Sort-Object) -join ', '
           # The server list is read from the script itself, so the test follows any change to $ServerMods.
           $serverList = [regex]::Match((Get-Content install-server.ps1 -Raw), '\$ServerMods = @\(([^)]*)\)').Groups[1].Value
-          $serverMods = @([regex]::Matches($serverList, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
-          if ($serverMods.Count -eq 0) { throw 'Could not read $ServerMods from install-server.ps1' }
+          $serverMods = (@([regex]::Matches($serverList, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) | Sort-Object) -join ', '
+          if (-not $serverMods) { throw 'Could not read $ServerMods from install-server.ps1' }
 
-          Test-Install 'install.ps1' 'ValheimPath' $allMods
-          Test-Install 'install-server.ps1' 'ServerPath' $serverMods
+          function New-Target([string]$name) {
+            $folder = Join-Path $env:RUNNER_TEMP "test-$name"
+            New-Item -ItemType Directory -Force $folder | Out-Null
+            return $folder
+          }
+          function Get-Mods([string]$folder) {
+            (@(Get-ChildItem (Join-Path $folder 'BepInEx\plugins') -Directory -ErrorAction SilentlyContinue | ForEach-Object Name | Sort-Object)) -join ', '
+          }
+          function Assert-Equal([string]$what, $actual, $expected) {
+            if ("$actual" -ne "$expected") { throw "${what}: got [$actual], expected [$expected]" }
+            Write-Host "ok: $what"
+          }
+          function Assert-BepInEx([string]$folder) {
+            foreach ($file in 'BepInEx\core\BepInEx.dll', 'winhttp.dll') {
+              if (-not (Test-Path (Join-Path $folder $file))) { throw "Missing after install in ${folder}: $file" }
+            }
+          }
+
+          # Empty folders: every mod for the game, exactly the server mods for the server.
+          $game = New-Target 'game'
+          ./install.ps1 -ValheimPath $game -ZipPath $zip
+          Assert-BepInEx $game
+          Assert-Equal 'install.ps1 installs every mod' (Get-Mods $game) $allMods
+
+          $server = New-Target 'server'
+          ./install-server.ps1 -ServerPath $server -ZipPath $zip
+          Assert-BepInEx $server
+          Assert-Equal 'install-server.ps1 installs the server mods' (Get-Mods $server) $serverMods
+
+          # -Mods as a single comma-separated string (what powershell -File passes), in another case.
+          $subset = New-Target 'subset'
+          ./install.ps1 -ValheimPath $subset -ZipPath $zip -Mods 'stackmax, QuickBrew'
+          Assert-Equal '-Mods installs only the given mods' (Get-Mods $subset) 'QuickBrew, StackMax'
+
+          # Uninstalling one mod with its settings leaves the other mod and its settings.
+          $config = Join-Path $subset 'BepInEx\config'
+          New-Item -ItemType Directory -Force $config | Out-Null
+          foreach ($file in 'valheim.quickbrew.cfg', 'valheim.stackmax.cfg') { 'x' | Set-Content (Join-Path $config $file) }
+          ./install.ps1 -ValheimPath $subset -Uninstall -Mods QuickBrew -RemoveConfig
+          Assert-Equal '-Uninstall -Mods removes only that mod' (Get-Mods $subset) 'StackMax'
+          Assert-Equal '-RemoveConfig deletes only its settings' ((Get-ChildItem $config | ForEach-Object Name) -join ', ') 'valheim.stackmax.cfg'
+
+          # Uninstalling the modpack leaves mods installed from elsewhere, and BepInEx.
+          New-Item -ItemType Directory -Force (Join-Path $server 'BepInEx\plugins\OtherMod') | Out-Null
+          ./install-server.ps1 -ServerPath $server -ZipPath $zip -Uninstall
+          Assert-Equal '-Uninstall keeps mods from elsewhere' (Get-Mods $server) 'OtherMod'
+          Assert-BepInEx $server
+
+          # Removing BepInEx leaves exactly the files that were there before the install.
+          'x' | Set-Content (Join-Path $game 'valheim.exe')
+          ./install.ps1 -ValheimPath $game -ZipPath $zip -Uninstall -RemoveBepInEx
+          Assert-Equal '-RemoveBepInEx leaves only the game files' ((Get-ChildItem $game -Force | ForEach-Object Name) -join ', ') 'valheim.exe'
 
       - uses: actions/upload-artifact@v7
         with:

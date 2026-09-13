@@ -27,11 +27,16 @@ changes are exercised by CI (the server test reads its expected mod list from `$
 A `v*` tag publishes a release with `valheim-modpack.zip`, which both scripts download. Every project in the
 solution ends up in the package.
 
-Two install scripts: `install.ps1` (game, `-ValheimPath`, every mod) and `install-server.ps1` (dedicated server,
-`-ServerPath`, only `$ServerMods`). They are deliberately self-contained and share their functions by copy, so each
-one runs alone through `irm | iex` without fetching a second file that GitHub's raw cache could serve out of date:
-any change to a shared function must be made in both. Each refuses the other's folder (`valheim.exe` /
-`valheim_server.exe`). Add a mod to `$ServerMods` when it acts on objects the dedicated server can own.
+Two install scripts: `install.ps1` (game, `-ValheimPath`, offers every mod) and `install-server.ps1` (dedicated
+server, `-ServerPath`, offers only `$ServerMods`). They are deliberately self-contained and share their functions by
+copy, so each one runs alone through `irm | iex` without fetching a second file that GitHub's raw cache could serve
+out of date: everything between the `BEGIN SHARED BLOCK` / `END SHARED BLOCK` markers must stay byte-identical in
+both files (CI fails otherwise), and only the header, `param`, `$ServerMods` and the target folder lookup differ. In an
+interactive console they show arrow-key menus (install/update with mod checkboxes, or uninstall); `-Mods`,
+`-Uninstall`, `-BepInExOnly`, redirected input or the `CI` environment variable skip the menus. Uninstall only touches
+mod folders named in the modpack archive, and `-RemoveBepInEx` removes exactly the top-level entries of the
+BepInExPack archive. Each refuses the other's folder (`valheim.exe` / `valheim_server.exe`). Add a mod to
+`$ServerMods` when it acts on objects the dedicated server can own.
 The CI workflow and everything under `.github/` are written in English (comments, step names, messages).
 Both install scripts must stay compatible with Windows PowerShell 5.1 and be written in English, ASCII only (no BOM): 5.1 decodes `irm` downloads and BOM-less `-File` scripts as a legacy code page, and a UTF-8 BOM turns into
 garbage before `<#` that breaks parsing of the whole script.
