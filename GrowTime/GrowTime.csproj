@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>GrowTime</AssemblyName>
     <RootNamespace>GrowTime</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Description>Changes how long plants take to grow (crops, saplings) and how long wild bushes take to regrow.</Description>
   </PropertyGroup>
 

@@ -30,7 +30,7 @@ namespace GrowTime
     {
         public const string PluginGuid = "valheim.growtime";
         public const string PluginName = "GrowTime";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.0.1";
 
         internal static ManualLogSource Log;
 
@@ -54,10 +54,10 @@ namespace GrowTime
                     "Also applies to plants already in the ground.",
                     new AcceptableValueRange<float>(0f, 20f)));
 
-            RespawnTimeMultiplier = Config.Bind("Plants", "RespawnTimeMultiplier", 1f,
+            RespawnTimeMultiplier = Config.Bind("Plants", "RespawnTimeMultiplier", 0.05f,
                 new ConfigDescription(
                     "Multiplier applied to the regrowth time of wild pickables (berry bushes, mushrooms, thistle...). " +
-                    "1 = vanilla, 2 = twice as long, 0.5 = twice as fast.",
+                    "Berry bushes take 300 min in vanilla. 0.05 = 15 min, 0.1 = 30 min, 0.5 = twice as fast, 1 = vanilla.",
                     new AcceptableValueRange<float>(0f, 20f)));
 
             ShowRemainingTime = Config.Bind("Plants", "ShowRemainingTime", true,
