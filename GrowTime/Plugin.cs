@@ -47,11 +47,11 @@ namespace GrowTime
 
             Enabled = Config.Bind("General", "Enabled", true, "Enables or disables the mod.");
 
-            GrowTimeMultiplier = Config.Bind("Plants", "GrowTimeMultiplier", 2f,
+            GrowTimeMultiplier = Config.Bind("Plants", "GrowTimeMultiplier", 0.1f,
                 new ConfigDescription(
                     "Multiplier applied to the growth time of planted crops and saplings. Vanilla crops take about " +
-                    "3000 to 5000 s. 1 = vanilla, 2 = twice as long, 0.5 = twice as fast. Also applies to plants " +
-                    "already in the ground.",
+                    "4000 to 5000 s. 0.1 = about 8 min, 0.5 = twice as fast, 1 = vanilla, 2 = twice as long. " +
+                    "Also applies to plants already in the ground.",
                     new AcceptableValueRange<float>(0f, 20f)));
 
             RespawnTimeMultiplier = Config.Bind("Plants", "RespawnTimeMultiplier", 1f,
