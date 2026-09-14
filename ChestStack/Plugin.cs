@@ -50,7 +50,7 @@ namespace ChestStack
     {
         public const string PluginGuid = "valheim.cheststack";
         public const string PluginName = "ChestStack";
-        public const string PluginVersion = "1.0.3";
+        public const string PluginVersion = "1.0.4";
 
         internal static ManualLogSource Log;
 
@@ -99,11 +99,11 @@ namespace ChestStack
             Enabled = Config.Bind("General", "Enabled", true,
                 "Enables or disables storing into the surrounding chests.");
 
-            Radius = Config.Bind("General", "Radius", 20f,
+            Radius = Config.Bind("General", "Radius", 200f,
                 new ConfigDescription(
-                    "Maximum distance, in meters, of the chests involved in storing. Same default value " +
-                    "as ChestCraft, so that \"the chests that count\" refer to the same storehouse.",
-                    new AcceptableValueRange<float>(2f, 100f)));
+                    "Maximum distance, in meters, of the chests involved in storing. Chests outside the area " +
+                    "the game has loaded around you are never included, whatever this value.",
+                    new AcceptableValueRange<float>(2f, 500f)));
             MigrateKey(Radius, "General", "Rayon");
 
             ProtectHotbar = Config.Bind("General", "ProtectHotbar", true,
