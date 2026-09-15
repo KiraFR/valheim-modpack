@@ -84,7 +84,8 @@ namespace FieldPlanter
                 "Hold with the mouse wheel to change the row length (the ghost does not turn meanwhile).");
 
             WidthModifier = Config.Bind("Controls", "WidthModifier", KeyCode.LeftAlt,
-                "Hold with the mouse wheel to change the number of rows in Grid mode.");
+                "Hold with the mouse wheel to change the number of rows. From Row mode, the first notch up makes a 2-row grid; " +
+                "going below 2 rows returns to Row mode. The left and right keys both work.");
 
             ExtraSpacing = Config.Bind("Spacing", "ExtraSpacing", 0.1f,
                 new ConfigDescription(
@@ -131,11 +132,53 @@ namespace FieldPlanter
             string text;
             switch (Mode.Value)
             {
-                case PlantMode.Single: text = "Planting: one at a time"; break;
-                case PlantMode.Row: text = $"Planting: row of {RowLength.Value}"; break;
-                default: text = $"Planting: {RowLength.Value} x {GridWidth.Value} grid"; break;
+                case PlantMode.Single:
+                    text = $"Planting: one at a time ({KeyName(ModeKey.Value.MainKey)}: row)";
+                    break;
+                case PlantMode.Row:
+                    text = $"Planting: row of {RowLength.Value} ({KeyName(LengthModifier.Value)} + wheel: length, " +
+                           $"{KeyName(WidthModifier.Value)} + wheel: rows)";
+                    break;
+                default:
+                    text = $"Planting: {RowLength.Value} x {GridWidth.Value} grid ({KeyName(LengthModifier.Value)} + wheel: length, " +
+                           $"{KeyName(WidthModifier.Value)} + wheel: rows)";
+                    break;
             }
             player.Message(MessageHud.MessageType.Center, text);
+        }
+
+        /// <summary>
+        /// Either side of a modifier counts. AZERTY and other layouts are often used with AltGr, which Unity reports as
+        /// RightAlt, while the config names LeftAlt.
+        /// </summary>
+        internal static bool HeldModifier(KeyCode key)
+        {
+            if (key == KeyCode.None) return false;
+            if (Input.GetKey(key)) return true;
+            switch (key)
+            {
+                case KeyCode.LeftShift: return Input.GetKey(KeyCode.RightShift);
+                case KeyCode.RightShift: return Input.GetKey(KeyCode.LeftShift);
+                case KeyCode.LeftAlt: return Input.GetKey(KeyCode.RightAlt);
+                case KeyCode.RightAlt: return Input.GetKey(KeyCode.LeftAlt);
+                case KeyCode.LeftControl: return Input.GetKey(KeyCode.RightControl);
+                case KeyCode.RightControl: return Input.GetKey(KeyCode.LeftControl);
+                default: return false;
+            }
+        }
+
+        private static string KeyName(KeyCode key)
+        {
+            switch (key)
+            {
+                case KeyCode.LeftShift:
+                case KeyCode.RightShift: return "Shift";
+                case KeyCode.LeftControl:
+                case KeyCode.RightControl: return "Ctrl";
+                case KeyCode.LeftAlt:
+                case KeyCode.RightAlt: return "Alt";
+                default: return key.ToString();
+            }
         }
     }
 
@@ -671,8 +714,8 @@ namespace FieldPlanter
             }
             if (Plugin.Mode.Value == PlantMode.Single) return;
 
-            bool width = Plugin.Mode.Value == PlantMode.Grid && Input.GetKey(Plugin.WidthModifier.Value);
-            bool length = !width && Input.GetKey(Plugin.LengthModifier.Value);
+            bool width = Plugin.HeldModifier(Plugin.WidthModifier.Value);
+            bool length = !width && Plugin.HeldModifier(Plugin.LengthModifier.Value);
             if (!width && !length)
             {
                 s_scroll = 0f;
@@ -683,10 +726,28 @@ namespace FieldPlanter
             __state = __instance.m_placeRotation;
             s_scroll += ZInput.GetMouseScrollWheel();
             if (Mathf.Abs(s_scroll) < __instance.m_scrollAmountThreshold) return;
-
-            ConfigEntry<int> side = width ? Plugin.GridWidth : Plugin.RowLength;
-            side.Value = Mathf.Clamp(side.Value + (s_scroll > 0f ? 1 : -1), 1, Field.MaxSide);
+            int step = s_scroll > 0f ? 1 : -1;
             s_scroll = 0f;
+
+            if (length)
+            {
+                Plugin.RowLength.Value = Mathf.Clamp(Plugin.RowLength.Value + step, 1, Field.MaxSide);
+            }
+            else if (Plugin.Mode.Value == PlantMode.Row)
+            {
+                // A second row turns the row into a grid, so the gesture works without switching modes first
+                if (step < 0) return;
+                Plugin.Mode.Value = PlantMode.Grid;
+                Plugin.GridWidth.Value = 2;
+            }
+            else if (step < 0 && Plugin.GridWidth.Value <= 2)
+            {
+                Plugin.Mode.Value = PlantMode.Row;
+            }
+            else
+            {
+                Plugin.GridWidth.Value = Mathf.Clamp(Plugin.GridWidth.Value + step, 1, Field.MaxSide);
+            }
             Plugin.ShowLayout(__instance);
         }
 
