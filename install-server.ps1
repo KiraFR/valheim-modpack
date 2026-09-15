@@ -3,9 +3,12 @@
     Installs, updates or uninstalls the Valheim modpack (BepInEx + server-side mods) in a Valheim dedicated server folder.
 
 .DESCRIPTION
-    Run in a console without -Mods, -Uninstall or -BepInExOnly, the script shows menus navigated with the arrow keys:
+    Run in a console without -Mods, -Uninstall, -ResetConfig or -BepInExOnly, the script shows menus navigated with the
+    arrow keys:
     - Install or update: checkboxes for the mods needed server-side (already installed mods are checked). Only
       checked mods are installed; unchecking an installed mod removes it.
+    - Reset settings to default: checkboxes for the mods of the modpack that have settings here. Their files in
+      BepInEx/config are deleted; the mods stay installed and write their default settings again at the next launch.
     - Uninstall: checkboxes for the installed mods of the modpack, then whether to delete their settings and to
       remove BepInEx itself.
 
@@ -44,6 +47,9 @@ param(
     [switch]$RemoveConfig,
     # With -Uninstall: also removes BepInEx, with every other BepInEx mod and setting in the folder.
     [switch]$RemoveBepInEx,
+    # Deletes the settings of the modpack mods found here, or only -Mods, so they start again from their default
+    # settings. The mods stay installed. No menu.
+    [switch]$ResetConfig,
     # Installs BepInEx only, without the mods.
     [switch]$BepInExOnly,
     # Reinstalls BepInEx even if it is already present.
@@ -397,9 +403,24 @@ function Install-Mods([string]$target, [object]$pack, [string[]]$names) {
     }
 }
 
+# Settings files of a mod in BepInEx\config: every file a mod writes there starts with its GUID, valheim.<mod>. (its
+# .cfg, StackMax's item list).
+function Get-ModConfigFiles([string]$target, [string]$name) {
+    $config = Join-Path $target 'BepInEx\config'
+    if (-not (Test-Path $config)) { return }
+    Get-ChildItem $config -File -Filter "valheim.$($name.ToLowerInvariant()).*"
+}
+
+# Deletes the settings files of a mod; if it is installed, it writes its default settings again at the next launch.
+function Remove-ModConfig([string]$target, [string]$name) {
+    foreach ($file in Get-ModConfigFiles $target $name) {
+        Remove-Item -LiteralPath $file.FullName -Force
+        Write-Host "      $($file.Name) deleted"
+    }
+}
+
 function Uninstall-Mods([string]$target, [string[]]$names, [bool]$removeConfig) {
     $plugins = Join-Path $target 'BepInEx\plugins'
-    $config = Join-Path $target 'BepInEx\config'
 
     Write-Step "Removing mods from $plugins"
     foreach ($name in $names) {
@@ -412,13 +433,7 @@ function Uninstall-Mods([string]$target, [string[]]$names, [bool]$removeConfig) 
             Write-Host "    $name was not installed"
         }
 
-        if ($removeConfig -and (Test-Path $config)) {
-            # Every file a mod writes there starts with its GUID, valheim.<mod>. (its .cfg, StackMax's item list).
-            foreach ($file in Get-ChildItem $config -File -Filter "valheim.$($name.ToLowerInvariant()).*") {
-                Remove-Item -LiteralPath $file.FullName -Force
-                Write-Host "      $($file.Name) deleted"
-            }
-        }
+        if ($removeConfig) { Remove-ModConfig $target $name }
     }
 }
 
@@ -564,22 +579,86 @@ function Invoke-Uninstall([string]$target, [bool]$interactive) {
     Write-Step 'Done.'
 }
 
+# Deletes the settings of mods of the modpack, so each one starts again from its default settings at the next launch.
+# The mods stay installed.
+function Invoke-ResetConfig([string]$target, [bool]$interactive) {
+    $descriptions = @{}
+
+    if ($Mods) {
+        $names = @(Split-ModNames $Mods)
+    }
+    else {
+        # The names come from the modpack archive, so the settings of mods from elsewhere are never touched. Mods that
+        # are no longer installed count too: an uninstall without -RemoveConfig leaves their settings behind.
+        $temp = New-TempFolder
+        try {
+            $pack = Get-Modpack $temp
+            foreach ($mod in $pack.Mods) { $descriptions[$mod.Name] = $mod.Description }
+            $names = @($pack.Mods | ForEach-Object { $_.Name })
+        }
+        finally {
+            Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $found = @($names | Where-Object { @(Get-ModConfigFiles $target $_).Count -gt 0 })
+    if ($Mods) {
+        foreach ($name in $names) {
+            if ($found -notcontains $name) { Write-Warning "$name has no settings here, ignored." }
+        }
+    }
+    $names = $found
+    if ($names.Count -eq 0) { Write-Step 'No settings of the modpack mods here, nothing to reset.'; return }
+
+    if ($interactive) {
+        $installed = @(Get-InstalledMods $target $names)
+        $label = {
+            param($index, $isChecked)
+            $name = $names[$index]
+            $presence = 'not installed'
+            if ($installed -contains $name) { $presence = 'installed' }
+            $state = ''
+            if ($isChecked) { $state = 'will be reset' }
+            '{0,-12} {1,-13} {2,-13} {3}' -f $name, $presence, $state, $descriptions[$name]
+        }.GetNewClosure()
+
+        # Nothing is checked at first, since deleted settings cannot be brought back; A checks every mod.
+        $chosen = Show-Menu 'Mods whose settings go back to default values (their files in BepInEx\config are deleted)' $names.Count $label $true $null
+        if ($null -eq $chosen) { Write-Step 'Cancelled, nothing changed.'; return }
+        $names = @($chosen | ForEach-Object { $names[$_] })
+        if ($names.Count -eq 0) { Write-Step 'No mod checked, nothing changed.'; return }
+        if (-not (Read-YesNo "Delete the settings of $($names -join ', ')?" $true)) { Write-Step 'Cancelled, nothing changed.'; return }
+    }
+
+    Write-Step "Resetting settings in $(Join-Path $target 'BepInEx\config')"
+    foreach ($name in $names) {
+        Write-Host "    $name"
+        Remove-ModConfig $target $name
+    }
+    Write-Step 'Done. Each installed mod writes its default settings again at the next launch.'
+}
+
 # Entry point shared by both scripts. $scope: mods offered for installation (empty = every mod of the archive).
 function Invoke-Modpack([string]$target, [string]$processName, [string[]]$scope, [string]$doneMessage) {
     Assert-NotRunning $target $processName
     if ($ZipPath) { $script:ZipPath = (Resolve-Path $ZipPath).Path }
 
-    $interactive = (-not ($Uninstall -or $BepInExOnly -or $Mods)) -and (Test-Interactive)
-    $uninstalling = [bool]$Uninstall
+    $interactive = (-not ($Uninstall -or $ResetConfig -or $BepInExOnly -or $Mods)) -and (Test-Interactive)
+    $action = 'install'
+    if ($Uninstall) { $action = 'uninstall' }
+    elseif ($ResetConfig) { $action = 'reset' }
     if ($interactive) {
-        $actions = @('Install or update mods', 'Uninstall')
+        $actions = @('Install or update mods', 'Reset settings to default', 'Uninstall')
         $chosen = Show-Menu 'What do you want to do?' $actions.Count { param($index, $isChecked) $actions[$index] }.GetNewClosure() $false $null
         if ($null -eq $chosen) { Write-Step 'Cancelled, nothing changed.'; return }
-        $uninstalling = ($chosen[0] -eq 1)
+        $action = @('install', 'reset', 'uninstall')[$chosen[0]]
     }
 
-    if ($uninstalling) { Invoke-Uninstall $target $interactive }
-    else { Invoke-Install $target $scope $interactive $doneMessage }
+    switch ($action) {
+        'uninstall' { Invoke-Uninstall $target $interactive }
+        'reset' { Invoke-ResetConfig $target $interactive }
+        default { Invoke-Install $target $scope $interactive $doneMessage }
+    }
 }
 
 # ===== END SHARED BLOCK =====

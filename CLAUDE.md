@@ -35,9 +35,10 @@ server, `-ServerPath`, offers only `$ServerMods`). They are deliberately self-co
 copy, so each one runs alone through `irm | iex` without fetching a second file that GitHub's raw cache could serve
 out of date: everything between the `BEGIN SHARED BLOCK` / `END SHARED BLOCK` markers must stay byte-identical in
 both files (CI fails otherwise), and only the header, `param`, `$ServerMods` and the target folder lookup differ. In an
-interactive console they show arrow-key menus (install/update with mod checkboxes, or uninstall); `-Mods`,
-`-Uninstall`, `-BepInExOnly`, redirected input or the `CI` environment variable skip the menus. Uninstall only touches
-mod folders named in the modpack archive, and `-RemoveBepInEx` removes exactly the top-level entries of the
+interactive console they show arrow-key menus (install/update with mod checkboxes, reset settings, or uninstall);
+`-Mods`, `-Uninstall`, `-ResetConfig`, `-BepInExOnly`, redirected input or the `CI` environment variable skip the
+menus. Uninstall only touches mod folders named in the modpack archive, reset settings and `-RemoveConfig` only
+delete their `BepInEx/config/valheim.<mod>.*` files, and `-RemoveBepInEx` removes exactly the top-level entries of the
 BepInExPack archive. Each refuses the other's folder (`valheim.exe` / `valheim_server.exe`). Add a mod to
 `$ServerMods` when it acts on objects the dedicated server can own.
 The CI workflow and everything under `.github/` are written in English (comments, step names, messages).

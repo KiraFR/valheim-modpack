@@ -21,6 +21,9 @@ keys:
   checks or unchecks, Enter confirms. Already installed mods are checked (on a first install, every mod except the
   experimental ones), so running the command again updates the same set; unchecking an installed mod removes it. BepInExPack Valheim (Thunderstore) is installed if it is missing,
   and each checked mod is copied into `BepInEx/plugins/<Mod>/`.
+- **Reset settings to default**: one checkbox per mod of the modpack that has settings in `BepInEx/config`
+  (installed or not), none checked at first (`A` checks all). Their files (`valheim.<mod>.*`) are deleted after a
+  confirmation; the mods stay installed and write their default settings again at the next launch.
 - **Uninstall**: one checkbox per installed mod of the modpack, then whether to delete their settings (`.cfg`) and
   whether to remove BepInEx itself, which gives back a vanilla game folder.
 
@@ -41,7 +44,7 @@ PowerShell access need a manual copy of the archive.
 ## Script parameters
 
 Use `& ([scriptblock]::Create((irm <url>))) <parameters>` or `powershell -ExecutionPolicy Bypass -File <script> <parameters>`.
-`-Mods`, `-Uninstall` and `-BepInExOnly` skip the menus, and so does running outside an interactive console (CI,
+`-Mods`, `-Uninstall`, `-ResetConfig` and `-BepInExOnly` skip the menus, and so does running outside an interactive console (CI,
 redirected input): the parameters decide, and the default is to install every mod except experimental ones (every server mod
 for `install-server.ps1`).
 
@@ -52,6 +55,7 @@ for `install-server.ps1`).
 | `-Mods StackMax, ChestCraft` | Installs only these mods (or uninstalls only these with `-Uninstall`). |
 | `-Uninstall` | Uninstalls every installed mod of the modpack, or only `-Mods`. |
 | `-RemoveConfig` | With `-Uninstall`: also deletes the settings of the uninstalled mods (`BepInEx/config/valheim.<mod>.*`). |
+| `-ResetConfig` | Deletes the settings (`BepInEx/config/valheim.<mod>.*`) of every mod of the modpack found here, or only of `-Mods`: the mods stay installed and start again from their default settings. |
 | `-RemoveBepInEx` | With `-Uninstall`: also removes BepInEx, with every other BepInEx mod and setting in the folder. |
 | `-Version v1.2.0` | Uses a specific release instead of the latest one. |
 | `-ZipPath <zip>` | Uses a local archive. |
@@ -69,7 +73,7 @@ server's Steam build id, so the 2 GB server is only downloaded again after a Val
 the game version the mods were compiled against. It produces the `valheim-modpack.zip`
 artifact (`BepInEx/plugins/<Mod>/<Mod>.dll` for each project in the solution) and checks that both scripts install
 this archive correctly into empty folders (every mod for the game, exactly the server mods for the server), then
-exercises `-Mods`, `-Uninstall`, `-RemoveConfig` and `-RemoveBepInEx`. A first step checks that the block of
+exercises `-Mods`, `-Uninstall`, `-RemoveConfig`, `-ResetConfig` and `-RemoveBepInEx`. A first step checks that the block of
 functions shared by the two scripts is identical in both and that both are ASCII.
 
 To publish a release: `git tag v1.0.0 && git push origin v1.0.0`. This is the release both scripts download.

@@ -204,6 +204,13 @@ jobs:
           Assert-Equal '-Uninstall -Mods removes only that mod' (Get-Mods $subset) 'StackMax'
           Assert-Equal '-RemoveConfig deletes only its settings' ((Get-ChildItem $config -File | ForEach-Object Name | Sort-Object) -join ', ') 'BepInEx.cfg, valheim.stackmax.cfg'
 
+          # Resetting settings deletes those of every modpack mod, installed (StackMax) or not (QuickBrew), keeps the
+          # mods installed and leaves settings that are not the modpack's.
+          foreach ($file in 'valheim.quickbrew.cfg', 'other.mod.cfg') { 'x' | Set-Content (Join-Path $config $file) }
+          ./install.ps1 -ValheimPath $subset -ZipPath $zip -ResetConfig
+          Assert-Equal '-ResetConfig keeps the mods installed' (Get-Mods $subset) 'StackMax'
+          Assert-Equal '-ResetConfig deletes only the modpack settings' ((Get-ChildItem $config -File | ForEach-Object Name | Sort-Object) -join ', ') 'BepInEx.cfg, other.mod.cfg'
+
           # Uninstalling the modpack leaves mods installed from elsewhere, and BepInEx.
           New-Item -ItemType Directory -Force (Join-Path $server 'BepInEx\plugins\OtherMod') | Out-Null
           ./install-server.ps1 -ServerPath $server -ZipPath $zip -Uninstall
