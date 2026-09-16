@@ -39,6 +39,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KeepSkills", "KeepSkills\Ke
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Compass", "Compass\Compass.csproj", "{962D96BD-853D-4B72-8C31-5175FD4D5115}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShipDismantle", "ShipDismantle\ShipDismantle.csproj", "{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -265,6 +267,18 @@ Global
 		{962D96BD-853D-4B72-8C31-5175FD4D5115}.Release|x64.Build.0 = Release|Any CPU
 		{962D96BD-853D-4B72-8C31-5175FD4D5115}.Release|x86.ActiveCfg = Release|Any CPU
 		{962D96BD-853D-4B72-8C31-5175FD4D5115}.Release|x86.Build.0 = Release|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Debug|x64.Build.0 = Debug|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Debug|x86.Build.0 = Debug|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Release|x64.ActiveCfg = Release|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Release|x64.Build.0 = Release|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Release|x86.ActiveCfg = Release|Any CPU
+		{207938F4-0172-4B75-A5AA-9C9A6D62B3A0}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
