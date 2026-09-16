@@ -3,8 +3,8 @@
   <PropertyGroup>
     <AssemblyName>GrowTime</AssemblyName>
     <RootNamespace>GrowTime</RootNamespace>
-    <Version>1.0.1</Version>
-    <Description>Changes how long plants take to grow (crops, saplings) and how long wild bushes take to regrow.</Description>
+    <Version>1.1.0</Version>
+    <Description>Changes how long plants take to grow (crops, saplings), how long wild bushes take to regrow and how long the spinning wheel takes to process flax.</Description>
   </PropertyGroup>
 
   <ItemGroup>
