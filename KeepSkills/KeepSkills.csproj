@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>KeepSkills</AssemblyName>
+    <RootNamespace>KeepSkills</RootNamespace>
+    <Version>1.0.0</Version>
+    <Description>Removes or reduces the skill loss on death.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Makes private members of the referenced assemblies public (Publicize="true") -->
+    <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BepInEx + Harmony, taken straight from the game install. BepInEx is publicized for ConfigFile.OrphanedEntries (config key migration) -->
+    <Reference Include="BepInEx" Publicize="true">
+      <HintPath>$(BepInExCore)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExCore)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Game assemblies -->
+    <Reference Include="assembly_valheim" Publicize="true">
+      <HintPath>$(ValheimManaged)\assembly_valheim.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_utils" Publicize="true">
+      <HintPath>$(ValheimManaged)\assembly_utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="assembly_guiutils" Publicize="true">
+      <HintPath>$(ValheimManaged)\assembly_guiutils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Unity -->
+    <Reference Include="$(ValheimManaged)\UnityEngine.dll;$(ValheimManaged)\UnityEngine.*.dll">
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- After compilation: copies the DLL to BepInEx/plugins/KeepSkills/ -->
+  <Target Name="DeployToPlugins" AfterTargets="Build" Condition="Exists('$(BepInExPlugins)')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BepInExPlugins)\$(AssemblyName)" />
+    <Message Importance="high" Text="→ Deployed to $(BepInExPlugins)\$(AssemblyName)\$(TargetFileName)" />
+  </Target>
+
+</Project>
