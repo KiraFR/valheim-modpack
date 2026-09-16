@@ -15,15 +15,16 @@ namespace FieldHarvest
     ///   this frame, "alt" from AltPlace / JoyAltPlace / JoyAltKeys), not through Pickable.Interact: the game only
     ///   interacts with the first thing the crosshair ray hits, and after a first harvest that is often a dropped item
     ///   lying in front of the plants, or a plant that is not ripe yet. Holding the key does not repeat the area harvest.
-    /// - The kind comes from the hovered pickable, or else from the first pickable along the crosshair ray within
-    ///   interact distance, looking through dropped items and unripe plants. Same kind = same prefab (ZDO prefab hash):
-    ///   looking at a carrot harvests the carrots and leaves the turnips.
-    /// - Neighbours are found the way the scythe does it (Piece.OnPlaced): an overlap sphere on the piece,
-    ///   piece_nonsolid and item layers, keeping the pickables whose CanBePicked() is true.
+    /// - The kind is the item a pickable gives (shared name of Pickable.m_itemPrefab), so it can come from what the
+    ///   crosshair is on: a ripe pickable, an unripe plant (the pickable in Plant.m_grownPrefabs), or a dropped item.
+    ///   Looking at a carrot, a carrot sapling or a carrot on the ground harvests the carrots and leaves the turnips.
+    /// - Neighbours are searched on the layers the game lets the player interact with (Player.m_interactMask without
+    ///   terrain and characters), keeping the pickables whose CanBePicked() is true.
     /// - Each one goes through Pickable.Interact, like a scythe harvest: skill raise, bonus yield, stats, tar check, and
     ///   RPC_Pick sent to the plant's network owner, who drops the items and broadcasts the picked state. The hovered
     ///   pickable is left to the vanilla Interact that ran earlier in the same Update. Nothing is needed on the server
     ///   or on the other players.
+    /// - Every press logs what was aimed at and how many plants of that kind were found and harvested.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public class Plugin : BaseUnityPlugin
@@ -89,51 +90,157 @@ namespace FieldHarvest
     [HarmonyPatch(typeof(Player), nameof(Player.Update))]
     internal static class Player_Update_Patch
     {
-        private static int s_harvestMask;
+        private static int s_searchMask;
         private static readonly RaycastHit[] s_hits = new RaycastHit[32];
         private static readonly HashSet<Pickable> s_seen = new HashSet<Pickable>();
+
+        /// <summary>What to harvest: the item the pickables give, where to search, and what it was read from.</summary>
+        private struct Target
+        {
+            public string Kind;
+            public Vector3 Center;
+            /// <summary>Pickable the vanilla Interact already picked this frame, if any.</summary>
+            public Pickable Hovered;
+            public string Source;
+        }
 
         private static void Postfix(Player __instance)
         {
             if (!Plugin.Enabled.Value || __instance != Player.m_localPlayer) return;
             if (!(ZInput.GetButtonDown("Use") || ZInput.GetButtonDown("JoyUse")) || Hud.InRadial()) return;
-            if (!Plugin.AltHeld() || !__instance.TakeInput()) return;
-            if (__instance.InPlaceMode() || __instance.IsDead() || __instance.InAttack()) return;
+            if (!Plugin.AltHeld()) return;
 
-            GameObject hovering = __instance.m_hovering;
-            Pickable hovered = hovering != null ? hovering.GetComponentInParent<Pickable>() : null;
-            Pickable target = hovered != null ? hovered : AimedPickable(__instance);
-            if (target == null || target.m_nview == null || !target.m_nview.IsValid()) return;
+            string blocked = !__instance.TakeInput() ? "input taken by a menu or a cutscene"
+                : __instance.InPlaceMode() ? "a build tool is in hand"
+                : __instance.IsDead() ? "dead"
+                : __instance.InAttack() ? "attacking" : null;
+            if (blocked != null)
+            {
+                Plugin.Log.LogInfo($"Area harvest skipped: {blocked}.");
+                return;
+            }
 
-            int harvested = Harvest(__instance, target, hovered);
+            if (!FindTarget(__instance, out Target target))
+            {
+                Plugin.Log.LogInfo($"Area harvest: nothing to harvest under the crosshair (first hit: {FirstHit(__instance)}).");
+                return;
+            }
+
+            int harvested = Harvest(__instance, target, out int sameKind, out int ripe);
+            Plugin.Log.LogInfo($"Area harvest from {target.Source}: kind {target.Kind}, {sameKind} of that kind within " +
+                               $"{Plugin.Radius.Value:0.#} m, {ripe} ripe, {harvested} harvested.");
+
+            int total = harvested + (target.Hovered != null ? 1 : 0);
             if (harvested > 0 && Plugin.ShowCount.Value)
-                __instance.Message(MessageHud.MessageType.TopLeft, $"Harvested {harvested} around");
+                __instance.Message(MessageHud.MessageType.TopLeft, $"Harvested {total} around");
+        }
+
+        /// <summary>Shared name of the item a pickable gives ("$item_carrot"), or its prefab name when it gives none.</summary>
+        private static string KindOf(Pickable pickable)
+        {
+            ItemDrop item = pickable.m_itemPrefab != null ? pickable.m_itemPrefab.GetComponent<ItemDrop>() : null;
+            return item != null ? item.m_itemData.m_shared.m_name : "prefab " + NameOf(pickable);
+        }
+
+        /// <summary>Kind of the pickable an unripe plant grows into, or null for a plant that does not (a tree sapling).</summary>
+        private static string GrownKind(Plant plant)
+        {
+            foreach (GameObject grown in plant.m_grownPrefabs)
+            {
+                Pickable pickable = grown != null ? grown.GetComponent<Pickable>() : null;
+                if (pickable != null) return KindOf(pickable);
+            }
+            return null;
+        }
+
+        private static string NameOf(Component component)
+        {
+            return component.gameObject.name.Replace("(Clone)", "");
         }
 
         /// <summary>
-        /// First pickable along the crosshair ray within interact distance. Dropped items and unripe plants do not stop
-        /// the ray, anything else (ground, wall, creature) does.
+        /// The hovered pickable, or else the first pickable or unripe plant along the crosshair ray within interact distance,
+        /// or else the first dropped item on it. Dropped items do not stop the ray, anything else (ground, wall, creature) does.
         /// </summary>
-        private static Pickable AimedPickable(Player player)
+        private static bool FindTarget(Player player, out Target target)
         {
-            if (GameCamera.instance == null) return null;
-            Transform camera = GameCamera.instance.transform;
+            target = default;
+            GameObject hovering = player.m_hovering;
+            Pickable hovered = hovering != null ? hovering.GetComponentInParent<Pickable>() : null;
+            if (hovered != null)
+            {
+                target = new Target { Kind = KindOf(hovered), Center = hovered.transform.position, Hovered = hovered, Source = "hovered " + NameOf(hovered) };
+                return true;
+            }
 
-            int count = Physics.RaycastNonAlloc(camera.position, camera.forward, s_hits, 50f, player.m_interactMask);
-            System.Array.Sort(s_hits, 0, count, ByDistance.Instance);
-
+            bool hasDropped = false;
+            Target dropped = default;
+            int count = CastCrosshair(player);
             for (int i = 0; i < count; i++)
             {
                 RaycastHit hit = s_hits[i];
-                if (hit.collider.attachedRigidbody != null && hit.collider.attachedRigidbody.gameObject == player.gameObject) continue;
-                if (Vector3.Distance(player.m_eye.position, hit.point) > player.m_maxInteractDistance) return null;
+                if (IsSelf(player, hit)) continue;
+                if (Vector3.Distance(player.m_eye.position, hit.point) > player.m_maxInteractDistance + 1f) break;
 
                 Pickable pickable = hit.collider.GetComponentInParent<Pickable>();
-                if (pickable != null) return pickable;
-                if (hit.collider.GetComponentInParent<ItemDrop>() != null || hit.collider.GetComponentInParent<Plant>() != null) continue;
-                return null;
+                if (pickable != null)
+                {
+                    target = new Target { Kind = KindOf(pickable), Center = pickable.transform.position, Source = "aimed " + NameOf(pickable) };
+                    return true;
+                }
+
+                Plant plant = hit.collider.GetComponentInParent<Plant>();
+                if (plant != null)
+                {
+                    string kind = GrownKind(plant);
+                    if (kind == null) continue;
+                    target = new Target { Kind = kind, Center = plant.transform.position, Source = "unripe " + NameOf(plant) };
+                    return true;
+                }
+
+                ItemDrop item = hit.collider.GetComponentInParent<ItemDrop>();
+                if (item != null)
+                {
+                    if (!hasDropped)
+                    {
+                        dropped = new Target { Kind = item.m_itemData.m_shared.m_name, Center = hit.point, Source = "dropped " + NameOf(item) };
+                        hasDropped = true;
+                    }
+                    continue;
+                }
+                break;
             }
-            return null;
+
+            target = dropped;
+            return hasDropped;
+        }
+
+        private static int CastCrosshair(Player player)
+        {
+            if (GameCamera.instance == null) return 0;
+            Transform camera = GameCamera.instance.transform;
+            int count = Physics.RaycastNonAlloc(camera.position, camera.forward, s_hits, 50f, player.m_interactMask);
+            System.Array.Sort(s_hits, 0, count, ByDistance.Instance);
+            return count;
+        }
+
+        private static bool IsSelf(Player player, RaycastHit hit)
+        {
+            return hit.collider.attachedRigidbody != null && hit.collider.attachedRigidbody.gameObject == player.gameObject;
+        }
+
+        /// <summary>For the log: what the crosshair ray hits first, and how far from the eyes.</summary>
+        private static string FirstHit(Player player)
+        {
+            int count = CastCrosshair(player);
+            for (int i = 0; i < count; i++)
+            {
+                RaycastHit hit = s_hits[i];
+                if (IsSelf(player, hit)) continue;
+                float distance = Vector3.Distance(player.m_eye.position, hit.point);
+                return $"{hit.collider.name} on layer {LayerMask.LayerToName(hit.collider.gameObject.layer)} at {distance:0.0} m";
+            }
+            return "nothing";
         }
 
         /// <summary>RaycastNonAlloc returns hits in no particular order.</summary>
@@ -143,31 +250,35 @@ namespace FieldHarvest
             public int Compare(RaycastHit a, RaycastHit b) => a.distance.CompareTo(b.distance);
         }
 
-        private static int Harvest(Player player, Pickable target, Pickable hovered)
+        private static int Harvest(Player player, Target target, out int sameKind, out int ripe)
         {
-            if (s_harvestMask == 0) s_harvestMask = LayerMask.GetMask("piece", "piece_nonsolid", "item");
-            int prefab = target.m_nview.GetZDO().GetPrefab();
+            // Player.m_interactMask without terrain and characters: whatever the player can pick, the search can find
+            if (s_searchMask == 0)
+                s_searchMask = LayerMask.GetMask("item", "piece", "piece_nonsolid", "Default", "static_solid", "Default_small", "vehicle");
 
             s_seen.Clear();
-            // The vanilla Interact already picked the hovered one this frame
-            if (hovered != null) s_seen.Add(hovered);
+            if (target.Hovered != null) s_seen.Add(target.Hovered);
+            sameKind = 0;
+            ripe = 0;
             int harvested = 0;
 
-            foreach (Collider collider in Physics.OverlapSphere(target.transform.position, Plugin.Radius.Value, s_harvestMask))
+            foreach (Collider collider in Physics.OverlapSphere(target.Center, Plugin.Radius.Value, s_searchMask))
             {
                 Pickable pickable = collider.GetComponentInParent<Pickable>();
                 if (pickable == null || !s_seen.Add(pickable)) continue;
 
                 ZNetView nview = pickable.m_nview;
-                if (nview == null || !nview.IsValid() || nview.GetZDO().GetPrefab() != prefab) continue;
+                if (nview == null || !nview.IsValid() || KindOf(pickable) != target.Kind) continue;
+                sameKind++;
                 if (!pickable.CanBePicked()) continue;
+                ripe++;
 
                 pickable.Interact(player, repeat: false, alt: false);
                 harvested++;
             }
 
             s_seen.Clear();
-            return hovered != null && harvested > 0 ? harvested + 1 : harvested;
+            return harvested;
         }
     }
 
