@@ -19,12 +19,13 @@ namespace GrowTime
     ///   applies at once to plants already in the ground.
     /// - Pickable (berry bushes, mushrooms, thistle...): ShouldRespawn reads m_respawnTimeMinutes, which the mod
     ///   scales for the duration of the call.
-    /// - Spinning wheel (flax to linen thread): it is a Smelter, and m_secPerProduct is only read by UpdateSmelter on
-    ///   the station's owner, so the mod scales it for the duration of that call. The progress lives in the ZDO
-    ///   (bake timer), so a load already in the wheel just finishes sooner.
+    /// - Spinning wheel (flax to linen thread) and windmill (barley and oats to flour): both are Smelters, and
+    ///   m_secPerProduct is only read by UpdateSmelter on the station's owner, so the mod scales it for the duration of
+    ///   that call. The progress lives in the ZDO (bake timer), so a load already in the station just finishes sooner.
+    ///   The windmill still depends on the wind: its progress per second is Windmill.GetPowerOutput().
     ///
-    /// Multiplayer: Grow(), the respawn of a bush and the spinning wheel only run on the object's network owner (a
-    /// nearby player), so the owner's multiplier decides. Install the mod for every player with the same config AND on the dedicated
+    /// Multiplayer: Grow(), the respawn of a bush and the stations only run on the object's network owner (a nearby
+    /// player), so the owner's multiplier decides. Install the mod for every player with the same config AND on the dedicated
     /// server: the server's reference position stays at the world centre, so it permanently owns the plants around
     /// the spawn, where the first farm usually is.
     /// </summary>
@@ -33,10 +34,13 @@ namespace GrowTime
     {
         public const string PluginGuid = "valheim.growtime";
         public const string PluginName = "GrowTime";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.2.0";
 
         /// <summary>Smelter.m_name of the vanilla spinning wheel (prefab piece_spinningwheel).</summary>
         internal const string SpinningWheelName = "$piece_spinningwheel";
+
+        /// <summary>Smelter.m_name of the vanilla windmill (prefab windmill).</summary>
+        internal const string WindmillName = "$piece_windmill";
 
         internal static ManualLogSource Log;
 
@@ -45,6 +49,7 @@ namespace GrowTime
         internal static ConfigEntry<float> RespawnTimeMultiplier;
         internal static ConfigEntry<bool> ShowRemainingTime;
         internal static ConfigEntry<float> SpinningWheelMultiplier;
+        internal static ConfigEntry<float> WindmillMultiplier;
 
         private Harmony _harmony;
 
@@ -75,6 +80,13 @@ namespace GrowTime
                     "Multiplier applied to the spinning wheel's time per flax. Vanilla: 30 s per linen thread, 20 min " +
                     "for a full load of 40. 0.1 = 3 s (2 min for 40), 0.5 = twice as fast, 1 = vanilla. The wheel " +
                     "advances in 1 s steps, so it never makes more than one thread per second.",
+                    new AcceptableValueRange<float>(0.01f, 20f)));
+
+            WindmillMultiplier = Config.Bind("Processing", "WindmillMultiplier", 0.1f,
+                new ConfigDescription(
+                    "Multiplier applied to the windmill's time per grain (barley and oats). Vanilla: 10 s per flour in " +
+                    "full wind, about 8 min for a full load of 50. 0.1 = 1 s (50 s for 50), 0.5 = twice as fast, " +
+                    "1 = vanilla. Weaker wind still slows it down, and it never makes more than one flour per second.",
                     new AcceptableValueRange<float>(0.01f, 20f)));
 
             _harmony = new Harmony(PluginGuid);
@@ -144,8 +156,8 @@ namespace GrowTime
     }
 
     /// <summary>
-    /// Scales the spinning wheel's time per product for the duration of UpdateSmelter, the only reader of
-    /// m_secPerProduct (it returns before using it when not the owner). Restored in the Postfix.
+    /// Scales the time per product of the spinning wheel and the windmill for the duration of UpdateSmelter, the only
+    /// reader of m_secPerProduct (it returns before using it when not the owner). Restored in the Postfix.
     /// </summary>
     [HarmonyPatch(typeof(Smelter), nameof(Smelter.UpdateSmelter))]
     internal static class Smelter_UpdateSmelter_Patch
@@ -153,8 +165,12 @@ namespace GrowTime
         private static void Prefix(Smelter __instance, out float __state)
         {
             __state = __instance.m_secPerProduct;
-            if (Plugin.Enabled.Value && __instance.m_name == Plugin.SpinningWheelName)
+            if (!Plugin.Enabled.Value) return;
+
+            if (__instance.m_name == Plugin.SpinningWheelName)
                 __instance.m_secPerProduct *= Plugin.SpinningWheelMultiplier.Value;
+            else if (__instance.m_name == Plugin.WindmillName)
+                __instance.m_secPerProduct *= Plugin.WindmillMultiplier.Value;
         }
 
         private static void Postfix(Smelter __instance, float __state)
