@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>ChestCraft</AssemblyName>
     <RootNamespace>ChestCraft</RootNamespace>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <Description>Crafting and building by drawing from nearby chests.</Description>
   </PropertyGroup>
 
@@ -40,6 +40,11 @@
 
     <!-- Unity -->
     <Reference Include="$(ValheimManaged)\UnityEngine.dll;$(ValheimManaged)\UnityEngine.*.dll">
+      <Private>false</Private>
+    </Reference>
+    <!-- TextMeshPro: owned count on the requirement slots, craft amount dropdown -->
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(ValheimManaged)\Unity.TextMeshPro.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

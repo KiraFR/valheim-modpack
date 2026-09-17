@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -7,7 +8,10 @@ using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
+using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 namespace ChestCraft
 {
@@ -42,7 +46,7 @@ namespace ChestCraft
     {
         public const string PluginGuid = "valheim.chestcraft";
         public const string PluginName = "ChestCraft";
-        public const string PluginVersion = "1.0.1";
+        public const string PluginVersion = "1.1.0";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;
@@ -61,6 +65,9 @@ namespace ChestCraft
         internal static ConfigEntry<KeyboardShortcut> ChoiceKey;
         internal static ConfigEntry<KeyboardShortcut> FillKey;
         internal static ConfigEntry<string> StationChoices;
+        internal static ConfigEntry<bool> ShowOwned;
+        internal static ConfigEntry<bool> AmountPicker;
+        internal static ConfigEntry<string> CraftAmounts;
 
         /// <summary>Choice value meaning "take nothing from chests for this station".</summary>
         internal const string ChoiceNone = "-";
@@ -151,6 +158,19 @@ namespace ChestCraft
             IgnoreCarts = Config.Bind("General", "IgnoreCarts", false,
                 "Ignores carts and ships: only chests placed on the ground are used.");
             MigrateKey(IgnoreCarts, "General", "IgnorerChariots");
+
+            ShowOwned = Config.Bind("Crafting panel", "ShowOwned", true,
+                "Shows in small type, next to each required amount, how many you own in total: the backpack, " +
+                "plus the nearby chests while General.Crafting (General.Building for the hammer menu) is on.");
+
+            AmountPicker = Config.Bind("Crafting panel", "AmountPicker", true,
+                "Adds a dropdown below the craft button to choose how many to craft at once, instead of " +
+                "the game's fixed x5 while holding the multi-craft key. Upgrades always craft one. " +
+                "Takes effect after a restart.");
+
+            CraftAmounts = Config.Bind("Crafting panel", "CraftAmounts", "1, 5, 10, 20, 50, 100, Max",
+                "Choices offered by the dropdown, separated by commas: whole numbers, and Max to craft as many as " +
+                "the materials and the free backpack space allow. Takes effect after a restart.");
 
             ChoiceKey = Config.Bind("Controls", "ChoiceKey", new KeyboardShortcut(KeyCode.R),
                 "Key that cycles the ingredient taken from chests, while aiming at a station. " +
@@ -903,6 +923,326 @@ namespace ChestCraft
         }
 
         // ------------------------------------------------------------------------------------------------
+        // Crafting panel: owned count and craft amount picker
+        // ------------------------------------------------------------------------------------------------
+
+        /// <summary>Dropdown choice that crafts as many as the materials and the backpack space allow.</summary>
+        internal const string AmountMax = "Max";
+
+        /// <summary>Hard cap for Max, so a recipe without cost does not queue an absurd batch.</summary>
+        private const int MaxCraftCap = 999;
+
+        /// <summary>Height of the dropdown, as a fraction of the craft button's height.</summary>
+        private const float PickerHeight = 0.5f;
+
+        /// <summary>Space between the craft button and the dropdown below it, as a fraction of the button's height.</summary>
+        private const float PickerGap = 0.2f;
+
+        internal static TMP_Dropdown AmountDropdown;
+
+        private static readonly List<string> AmountOptions = new List<string>();
+
+        /// <summary>Index of the chosen option. Kept while the game runs, so a batch size survives recipe changes.</summary>
+        private static int _amountIndex;
+
+        /// <summary>The game's own multi-craft amount (5), restored whenever the dropdown is back on 1.</summary>
+        private static int _vanillaMultiCraftAmount = -1;
+
+        /// <summary>True while the mod, not a touch long press, set m_touchMultiCrafting.</summary>
+        private static bool _forcingMultiCraft;
+
+        /// <summary>Count for the small owned figure: in full up to 99 999, then k and M so it stays short.</summary>
+        internal static string FormatCount(int count)
+        {
+            if (count < 100000) return count.ToString(CultureInfo.InvariantCulture);
+            if (count < 1000000) return (count / 1000).ToString(CultureInfo.InvariantCulture) + "k";
+            return (count / 1000000f).ToString("0.#", CultureInfo.InvariantCulture) + "M";
+        }
+
+        /// <summary>Rich text appended to the required amount. The size tag keeps large stocks inside the slot.</summary>
+        internal static string OwnedSuffix(int owned)
+        {
+            return "<size=60%><color=#C9C2B4> / " + FormatCount(owned) + "</color></size>";
+        }
+
+        /// <summary>Dropdown choices from the config: positive whole numbers and Max, in the order written.</summary>
+        private static List<string> ParseAmounts()
+        {
+            var options = new List<string>();
+            foreach (string entry in ParseList(CraftAmounts.Value))
+            {
+                if (string.Equals(entry, AmountMax, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!options.Contains(AmountMax)) options.Add(AmountMax);
+                }
+                else if (int.TryParse(entry, NumberStyles.Integer, CultureInfo.InvariantCulture, out int amount) && amount >= 1)
+                {
+                    string text = amount.ToString(CultureInfo.InvariantCulture);
+                    if (!options.Contains(text)) options.Add(text);
+                }
+                else
+                {
+                    Log.LogWarning($"Craft amount ignored, expected a whole number or {AmountMax}: \"{entry}\"");
+                }
+            }
+
+            if (!options.Contains("1")) options.Insert(0, "1");
+            return options;
+        }
+
+        /// <summary>
+        /// Builds the dropdown right below the craft button, as its child. TMP_DefaultControls is the factory behind
+        /// Unity's own "create dropdown" menu; the result then borrows the craft button's sprite and font to look native.
+        /// </summary>
+        internal static void CreateAmountPicker(InventoryGui gui)
+        {
+            if (gui == null || gui.m_craftButton == null || AmountDropdown != null) return;
+
+            RectTransform button = (RectTransform)gui.m_craftButton.transform;
+            TMP_Text buttonLabel = gui.m_craftButton.GetComponentInChildren<TMP_Text>(true);
+            Image buttonImage = gui.m_craftButton.GetComponent<Image>();
+
+            GameObject go = TMP_DefaultControls.CreateDropdown(new TMP_DefaultControls.Resources());
+            go.name = "ChestCraftAmountPicker";
+
+            // A child of the button, placed with anchors in fractions of the button's own rect (negative values
+            // reach below it): it takes the button's width whatever the button's anchors, and hides with it during
+            // the progress bar. Added as the last child, so the game's GetComponentInChildren<TMP_Text>() still
+            // finds the button's own label first.
+            go.transform.SetParent(button, false);
+            RectTransform rect = (RectTransform)go.transform;
+            rect.anchorMin = new Vector2(0f, -PickerGap - PickerHeight);
+            rect.anchorMax = new Vector2(1f, -PickerGap);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+
+            TMP_Dropdown dropdown = go.GetComponent<TMP_Dropdown>();
+
+            // Keyboard focus would let the jump key reopen the list: the dropdown is mouse only.
+            dropdown.navigation = new Navigation { mode = Navigation.Mode.None };
+
+            Image background = go.GetComponent<Image>();
+            if (background != null && buttonImage != null)
+            {
+                background.sprite = buttonImage.sprite;
+                background.type = buttonImage.type;
+                background.color = buttonImage.color;
+            }
+
+            Transform arrow = go.transform.Find("Arrow");
+            if (arrow != null) arrow.gameObject.SetActive(false);
+
+            Transform label = go.transform.Find("Label");
+            if (label != null)
+            {
+                var labelRect = (RectTransform)label;
+                labelRect.offsetMin = new Vector2(4f, 0f);
+                labelRect.offsetMax = new Vector2(-4f, 0f);
+            }
+
+            foreach (TMP_Text text in go.GetComponentsInChildren<TMP_Text>(true))
+            {
+                if (buttonLabel != null)
+                {
+                    text.font = buttonLabel.font;
+                    text.fontSharedMaterial = buttonLabel.fontSharedMaterial;
+                    text.color = buttonLabel.color;
+                }
+                text.alignment = TextAlignmentOptions.Center;
+                text.enableAutoSizing = true;
+                text.fontSizeMin = 10f;
+                text.fontSizeMax = buttonLabel != null ? buttonLabel.fontSize : 18f;
+            }
+
+            var panel = new Color(0.11f, 0.09f, 0.07f, 0.97f);
+            var accent = new Color(0.85f, 0.6f, 0.25f, 1f);
+            foreach (Image image in dropdown.template.GetComponentsInChildren<Image>(true))
+            {
+                switch (image.gameObject.name)
+                {
+                    case "Template":
+                    case "Scrollbar":
+                        image.color = panel;
+                        break;
+                    case "Handle":
+                        image.color = new Color(0.55f, 0.45f, 0.3f, 1f);
+                        break;
+                    case "Item Background":
+                        image.color = Color.white; // tinted by the toggle's colors below
+                        break;
+                    case "Item Checkmark":
+                        image.gameObject.SetActive(false);
+                        break;
+                }
+            }
+
+            Toggle item = dropdown.template.GetComponentInChildren<Toggle>(true);
+            if (item != null)
+            {
+                ColorBlock colors = item.colors;
+                colors.normalColor = new Color(1f, 1f, 1f, 0f);
+                colors.highlightedColor = new Color(accent.r, accent.g, accent.b, 0.45f);
+                colors.selectedColor = new Color(accent.r, accent.g, accent.b, 0.25f);
+                colors.pressedColor = new Color(accent.r, accent.g, accent.b, 0.6f);
+                item.colors = colors;
+            }
+
+            AmountOptions.Clear();
+            AmountOptions.AddRange(ParseAmounts());
+            dropdown.ClearOptions();
+            dropdown.AddOptions(AmountOptions.Select(option => option == AmountMax ? AmountMax : "x" + option).ToList());
+            _amountIndex = Mathf.Clamp(_amountIndex, 0, AmountOptions.Count - 1);
+            dropdown.value = _amountIndex;
+
+            dropdown.onValueChanged.AddListener(index =>
+            {
+                _amountIndex = index;
+                if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
+            });
+
+            AmountDropdown = dropdown;
+        }
+
+        /// <summary>Uncraft, a separate mod, reuses the craft button in its own tab: a craft amount means nothing there.</summary>
+        private static bool InUncraftTab(InventoryGui gui)
+        {
+            if (gui.m_tabCraft == null) return false;
+            Transform tab = gui.m_tabCraft.transform.parent.Find("TabUncraft");
+            if (tab == null || !tab.gameObject.activeInHierarchy) return false;
+            Button button = tab.GetComponent<Button>();
+            return button != null && !button.interactable;
+        }
+
+        /// <summary>
+        /// Turns the dropdown choice into the game's own multi-crafting. m_multiCraftAmount becomes the chosen amount,
+        /// and m_touchMultiCrafting, the flag a long press sets on touch screens, stands in for holding the
+        /// multi-craft key. Everything downstream follows untouched: button label, requirement check and colors,
+        /// consumption, craft duration. Back on 1, the vanilla amount returns, so holding the key still crafts x5.
+        /// </summary>
+        internal static void ApplyCraftAmount(InventoryGui gui, Player player)
+        {
+            if (gui == null) return;
+            if (_vanillaMultiCraftAmount < 0) _vanillaMultiCraftAmount = gui.m_multiCraftAmount;
+
+            // A craft in progress keeps the amount it was started with, even if Max would now say otherwise.
+            if (gui.m_craftTimer >= 0f) return;
+
+            Recipe recipe = gui.m_selectedRecipe.Recipe;
+            bool upgrade = gui.m_selectedRecipe.ItemData != null;
+            bool pickerOn = Enabled.Value && AmountPicker.Value && AmountDropdown != null && !InUncraftTab(gui);
+
+            if (AmountDropdown != null) AmountDropdown.interactable = pickerOn && recipe != null && !upgrade;
+
+            int amount = pickerOn && recipe != null && !upgrade ? SelectedAmount(player, recipe) : 1;
+            if (amount > 1)
+            {
+                gui.m_multiCraftAmount = amount;
+                gui.m_touchMultiCrafting = true;
+                _forcingMultiCraft = true;
+            }
+            else
+            {
+                gui.m_multiCraftAmount = _vanillaMultiCraftAmount;
+                if (_forcingMultiCraft)
+                {
+                    gui.m_touchMultiCrafting = false;
+                    _forcingMultiCraft = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Closes the open list, and only an open one. TMP_Dropdown.Hide() ends with Select(), which takes the UI focus:
+        /// InventoryGui.Update calls Hide() every frame while no player is spawned, so an unconditional call kept
+        /// stealing the focus from the server password field.
+        /// </summary>
+        internal static void CloseAmountList()
+        {
+            if (AmountDropdown != null && AmountDropdown.IsExpanded) AmountDropdown.Hide();
+        }
+
+        /// <summary>The dropdown follows the craft button: hidden during the progress bar and outside the craft tabs.</summary>
+        internal static void SyncPickerVisibility(InventoryGui gui)
+        {
+            if (AmountDropdown == null || gui == null || gui.m_craftButton == null) return;
+
+            bool show = Enabled.Value && AmountPicker.Value && gui.m_craftButton.gameObject.activeSelf && !InUncraftTab(gui);
+            if (AmountDropdown.gameObject.activeSelf == show) return;
+
+            if (!show) CloseAmountList();
+            AmountDropdown.gameObject.SetActive(show);
+        }
+
+        private static int SelectedAmount(Player player, Recipe recipe)
+        {
+            if (AmountOptions.Count == 0) return 1;
+
+            string option = AmountOptions[Mathf.Clamp(_amountIndex, 0, AmountOptions.Count - 1)];
+            if (option == AmountMax) return MaxCraftable(player, recipe);
+            return int.Parse(option, CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Largest batch the materials allow, counting nearby chests while crafting from chests is on, then capped by
+        /// what the backpack can hold of the result: the game refuses a craft whose output does not fit.
+        /// </summary>
+        internal static int MaxCraftable(Player player, Recipe recipe)
+        {
+            if (player == null || recipe == null || recipe.m_item == null) return 1;
+
+            CraftingStation station = player.GetCurrentCraftingStation();
+            int best = recipe.m_requireOnlyOneIngredient ? 0 : int.MaxValue;
+
+            bool opened = Open(Crafting.Value);
+            try
+            {
+                foreach (Piece.Requirement requirement in recipe.m_resources)
+                {
+                    if ((station != null && station.m_upgrader != requirement.m_upgraderResource) ||
+                        (station == null && requirement.m_upgraderResource) ||
+                        !requirement.m_resItem)
+                    {
+                        continue;
+                    }
+
+                    int perCraft = requirement.GetAmount(1);
+                    if (perCraft <= 0) continue;
+
+                    int owned = player.GetInventory().CountItems(requirement.m_resItem.m_itemData.m_shared.m_name);
+                    int batches = owned / perCraft;
+                    best = recipe.m_requireOnlyOneIngredient ? Math.Max(best, batches) : Math.Min(best, batches);
+                }
+            }
+            finally
+            {
+                Close(opened);
+            }
+
+            bool free = player.NoCostCheat() || (ZoneSystem.instance != null && ZoneSystem.instance.GetGlobalKey(GlobalKeys.NoCraftCost));
+            if (free) best = MaxCraftCap;
+
+            best = Math.Min(best, MaxCraftCap);
+            if (best <= 1) return 1;
+
+            // Binary search on the space left: CanAddItem already knows about partial stacks and free slots.
+            Inventory inventory = player.GetInventory();
+            GameObject result = recipe.m_item.gameObject;
+            int perBatch = Math.Max(1, recipe.m_amount);
+            if (!inventory.CanAddItem(result, perBatch)) return 1;
+
+            int low = 1;
+            int high = best;
+            while (low < high)
+            {
+                int middle = (low + high + 1) / 2;
+                if (inventory.CanAddItem(result, perBatch * middle)) low = middle;
+                else high = middle - 1;
+            }
+            return low;
+        }
+
+        // ------------------------------------------------------------------------------------------------
         // Diagnostics
         // ------------------------------------------------------------------------------------------------
 
@@ -1003,6 +1343,23 @@ namespace ChestCraft
         private static void Prefix(bool craft, out bool __state)
         {
             __state = Plugin.Open(craft ? Plugin.Crafting.Value : Plugin.Building.Value);
+        }
+
+        /// <summary>
+        /// Appends how many the player owns in total. Runs before the Finalizer, so the scope is still open and the
+        /// count includes the nearby chests exactly when the craft would draw from them.
+        /// </summary>
+        private static void Postfix(Transform elementRoot, Piece.Requirement req, Player player, bool __result)
+        {
+            if (!__result || !Plugin.Enabled.Value || !Plugin.ShowOwned.Value) return;
+            if (req == null || req.m_resItem == null || player == null) return;
+
+            Transform amountRoot = elementRoot.Find("res_amount");
+            TMP_Text amount = amountRoot != null ? amountRoot.GetComponent<TMP_Text>() : null;
+            if (amount == null) return;
+
+            int owned = player.GetInventory().CountItems(req.m_resItem.m_itemData.m_shared.m_name);
+            amount.text += Plugin.OwnedSuffix(owned);
         }
 
         private static void Finalizer(bool __state)
@@ -1403,6 +1760,66 @@ namespace ChestCraft
             Plugin.FillToMax(__instance.m_nview, user,
                 Localization.instance.Localize(__instance.m_fuelItem.m_itemData.m_shared.m_name),
                 Mathf.CeilToInt(__instance.m_maxFuel), () => __instance.Interact(user, hold: false, alt: true));
+        }
+    }
+
+    // ----------------------------------------------------------------------------------------------------
+    // Crafting panel: craft amount picker
+    // ----------------------------------------------------------------------------------------------------
+
+    [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.Awake))]
+    internal static class InventoryGui_Awake_AmountPicker_Patch
+    {
+        private static void Postfix(InventoryGui __instance)
+        {
+            if (!Plugin.Enabled.Value || !Plugin.AmountPicker.Value) return;
+
+            try
+            {
+                Plugin.CreateAmountPicker(__instance);
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning($"Craft amount picker not created: {e.Message}");
+            }
+        }
+    }
+
+    /// <summary>The prefix sets the amount before the game reads it this frame; the postfix mirrors the button.</summary>
+    [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.UpdateRecipe))]
+    internal static class InventoryGui_UpdateRecipe_AmountPicker_Patch
+    {
+        private static void Prefix(InventoryGui __instance, Player player)
+        {
+            Plugin.ApplyCraftAmount(__instance, player);
+        }
+
+        private static void Postfix(InventoryGui __instance)
+        {
+            Plugin.SyncPickerVisibility(__instance);
+        }
+    }
+
+    /// <summary>OnCraftPressed decides m_multiCrafting for the whole craft: the amount must be in place before it.</summary>
+    [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.OnCraftPressed))]
+    internal static class InventoryGui_OnCraftPressed_AmountPicker_Patch
+    {
+        private static void Prefix(InventoryGui __instance)
+        {
+            Plugin.ApplyCraftAmount(__instance, Player.m_localPlayer);
+        }
+    }
+
+    /// <summary>
+    /// The open list lives on its own canvas and would stay on screen after the inventory closes. Hide() runs every
+    /// frame while no player is spawned, hence the IsExpanded guard inside CloseAmountList.
+    /// </summary>
+    [HarmonyPatch(typeof(InventoryGui), nameof(InventoryGui.Hide))]
+    internal static class InventoryGui_Hide_AmountPicker_Patch
+    {
+        private static void Postfix()
+        {
+            Plugin.CloseAmountList();
         }
     }
 
