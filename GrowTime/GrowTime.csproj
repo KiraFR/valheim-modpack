@@ -3,8 +3,8 @@
   <PropertyGroup>
     <AssemblyName>GrowTime</AssemblyName>
     <RootNamespace>GrowTime</RootNamespace>
-    <Version>1.3.0</Version>
-    <Description>Changes how long plants take to grow (crops, saplings), how long wild bushes take to regrow and how long the spinning wheel, the windmill and the eitr refinery take to process flax, grain and soft tissue.</Description>
+    <Version>1.4.0</Version>
+    <Description>Changes how long plants take to grow (crops, saplings), how long wild bushes take to regrow and how long the stations take to process (spinning wheel, windmill, eitr refinery, smelter, charcoal kiln).</Description>
   </PropertyGroup>
 
   <ItemGroup>

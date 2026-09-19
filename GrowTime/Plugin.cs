@@ -19,9 +19,9 @@ namespace GrowTime
     ///   applies at once to plants already in the ground.
     /// - Pickable (berry bushes, mushrooms, thistle...): ShouldRespawn reads m_respawnTimeMinutes, which the mod
     ///   scales for the duration of the call.
-    /// - Spinning wheel (flax to linen thread), windmill (barley and oats to flour) and eitr refinery (soft tissue to
-    ///   eitr): all three are Smelters, and m_secPerProduct is only read by UpdateSmelter on the station's owner, so
-    ///   the mod scales it for the duration of that call. The progress lives in the ZDO (bake timer), so a load
+    /// - Stations (spinning wheel, windmill, eitr refinery, smelter, charcoal kiln): they are all Smelters, and
+    ///   m_secPerProduct is only read by UpdateSmelter on the station's owner, so the mod scales it for the duration
+    ///   of that call. The progress lives in the ZDO (bake timer), so a load
     ///   already in the station just finishes sooner, and the fuel spent per product does not change (UpdateSmelter
     ///   burns m_secPerProduct / m_fuelPerProduct per product either way). The windmill still depends on the wind:
     ///   its progress per second is Windmill.GetPowerOutput().
@@ -36,7 +36,7 @@ namespace GrowTime
     {
         public const string PluginGuid = "valheim.growtime";
         public const string PluginName = "GrowTime";
-        public const string PluginVersion = "1.3.0";
+        public const string PluginVersion = "1.4.0";
 
         /// <summary>Smelter.m_name of the vanilla spinning wheel (prefab piece_spinningwheel).</summary>
         internal const string SpinningWheelName = "$piece_spinningwheel";
@@ -47,6 +47,12 @@ namespace GrowTime
         /// <summary>Smelter.m_name of the vanilla eitr refinery (prefab eitrrefinery).</summary>
         internal const string EitrRefineryName = "$piece_eitrrefinery";
 
+        /// <summary>Smelter.m_name of the vanilla smelter (prefab smelter). The blast furnace is a separate piece.</summary>
+        internal const string SmelterName = "$piece_smelter";
+
+        /// <summary>Smelter.m_name of the vanilla charcoal kiln (prefab charcoal_kiln).</summary>
+        internal const string CharcoalKilnName = "$piece_charcoalkiln";
+
         internal static ManualLogSource Log;
 
         internal static ConfigEntry<bool> Enabled;
@@ -56,6 +62,8 @@ namespace GrowTime
         internal static ConfigEntry<float> SpinningWheelMultiplier;
         internal static ConfigEntry<float> WindmillMultiplier;
         internal static ConfigEntry<float> EitrRefineryMultiplier;
+        internal static ConfigEntry<float> SmelterMultiplier;
+        internal static ConfigEntry<float> CharcoalKilnMultiplier;
 
         private Harmony _harmony;
 
@@ -100,6 +108,19 @@ namespace GrowTime
                     "Multiplier applied to the eitr refinery's time per eitr. Vanilla: 40 s per eitr, about 13 min for " +
                     "a full load of 20 soft tissue. 0.1 = 4 s (80 s for 20), 0.5 = twice as fast, 1 = vanilla. The " +
                     "sap spent per eitr does not change.",
+                    new AcceptableValueRange<float>(0.01f, 20f)));
+
+            SmelterMultiplier = Config.Bind("Processing", "SmelterMultiplier", 0.1f,
+                new ConfigDescription(
+                    "Multiplier applied to the smelter's time per bar. Vanilla: 30 s per bar, 5 min for a full load of " +
+                    "10 ore. 0.1 = 3 s (30 s for 10), 0.5 = twice as fast, 1 = vanilla. The coal spent per bar does " +
+                    "not change. The blast furnace is a separate piece and is not affected.",
+                    new AcceptableValueRange<float>(0.01f, 20f)));
+
+            CharcoalKilnMultiplier = Config.Bind("Processing", "CharcoalKilnMultiplier", 0.1f,
+                new ConfigDescription(
+                    "Multiplier applied to the charcoal kiln's time per coal. Vanilla: 15 s per coal, about 6 min for " +
+                    "a full load of 25 wood. 0.1 = 1.5 s (about 40 s for 25), 0.5 = twice as fast, 1 = vanilla.",
                     new AcceptableValueRange<float>(0.01f, 20f)));
 
             _harmony = new Harmony(PluginGuid);
@@ -169,9 +190,9 @@ namespace GrowTime
     }
 
     /// <summary>
-    /// Scales the time per product of the spinning wheel, the windmill and the eitr refinery for the duration of
-    /// UpdateSmelter, the only reader of m_secPerProduct (it returns before using it when not the owner). Restored in
-    /// the Postfix. Other stations (smelter, kiln, blast furnace) keep their vanilla speed.
+    /// Scales the time per product of the supported stations for the duration of UpdateSmelter, the only reader of
+    /// m_secPerProduct (it returns before using it when not the owner). Restored in the Postfix. Stations with no
+    /// entry here (blast furnace, frost kiln, bathtub) keep their vanilla speed.
     /// </summary>
     [HarmonyPatch(typeof(Smelter), nameof(Smelter.UpdateSmelter))]
     internal static class Smelter_UpdateSmelter_Patch
@@ -191,6 +212,12 @@ namespace GrowTime
                     break;
                 case Plugin.EitrRefineryName:
                     __instance.m_secPerProduct *= Plugin.EitrRefineryMultiplier.Value;
+                    break;
+                case Plugin.SmelterName:
+                    __instance.m_secPerProduct *= Plugin.SmelterMultiplier.Value;
+                    break;
+                case Plugin.CharcoalKilnName:
+                    __instance.m_secPerProduct *= Plugin.CharcoalKilnMultiplier.Value;
                     break;
             }
         }
