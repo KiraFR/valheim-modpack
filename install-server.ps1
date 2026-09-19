@@ -61,7 +61,7 @@ param(
 # world spawn), BerryFarm (its saplings are prefabs the server must know to load and grow them) and PartialSleep
 # (only the server decides when the night is skipped).
 # The other mods are client-only, so the menu does not offer them.
-$ServerMods = @('StackMax', 'PortalMenu', 'QuickBrew', 'GrowTime', 'BerryFarm', 'PartialSleep')
+$ServerMods = @('StackMax', 'PortalMenu', 'QuickBrew', 'GrowTime', 'BerryFarm', 'PartialSleep', 'InfiniteTorch')
 
 # ===== BEGIN SHARED BLOCK: identical in install.ps1 and install-server.ps1, checked by CI =====
 # Each script works on its own through irm | iex, so the functions are shared by copy. Change both files together.
