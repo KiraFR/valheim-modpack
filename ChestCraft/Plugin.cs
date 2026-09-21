@@ -46,7 +46,7 @@ namespace ChestCraft
     {
         public const string PluginGuid = "valheim.chestcraft";
         public const string PluginName = "ChestCraft";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.2.0";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;
@@ -127,7 +127,7 @@ namespace ChestCraft
             Stations = Config.Bind("General", "Stations", true,
                 "Uses chests to feed stations: cooking station (cooking food above " +
                 "the fire), oven, smelter, charcoal kiln, blast furnace, windmill, spinning wheel, eitr " +
-                "refinery, fermenter, fires and torches (wood), ballistas (ammo). " +
+                "refinery, fermenter, fires and torches (wood), ballistas (ammo), shield generators (charcoal). " +
                 "Covers the raw material as well as the fuel.");
             MigrateKey(Stations, "General", "Appareils");
 
@@ -624,7 +624,11 @@ namespace ChestCraft
         internal static string AppendFill(Component station, string text)
         {
             if (!Enabled.Value || !FillAtOnce.Value || string.IsNullOrEmpty(text)) return text;
-            if (!(station is Smelter || station is CookingStation || station is Fireplace)) return text;
+            if (!(station is Smelter || station is CookingStation || station is Fireplace ||
+                  station is ShieldGenerator || station is Turret))
+            {
+                return text;
+            }
 
             string use = Localization.instance.Localize("$KEY_Use");
             return text + "\n[<color=yellow><b>" + KeyName(FillKey.Value.MainKey) + " + " + use +
@@ -652,6 +656,12 @@ namespace ChestCraft
                 return sw == fermenter.m_addSwitch ? fermenter : null;
             }
 
+            ShieldGenerator shield = sw.GetComponentInParent<ShieldGenerator>();
+            if (shield != null)
+            {
+                return sw == shield.m_addFuelSwitch ? shield : null;
+            }
+
             return null;
         }
 
@@ -675,6 +685,9 @@ namespace ChestCraft
 
             Turret turret = hover.GetComponentInParent<Turret>();
             if (turret != null) return turret;
+
+            ShieldGenerator shield = hover.GetComponentInParent<ShieldGenerator>();
+            if (shield != null) return shield;
 
             return null;
         }
@@ -1530,6 +1543,8 @@ namespace ChestCraft
             yield return AccessTools.Method(typeof(Fireplace), nameof(Fireplace.TryGetItems));
 
             yield return AccessTools.Method(typeof(Turret), nameof(Turret.UseItem));
+
+            yield return AccessTools.Method(typeof(ShieldGenerator), nameof(ShieldGenerator.OnAddFuel));
         }
 
         private static void Prefix(MonoBehaviour __instance, out bool __state)
@@ -1710,6 +1725,53 @@ namespace ChestCraft
             Plugin.FillToMax(__instance.m_nview, user,
                 Localization.instance.Localize(__instance.m_fuelItem.m_itemData.m_shared.m_name),
                 __instance.m_maxFuel, () => __instance.OnAddFuel(sw, user, null));
+        }
+    }
+
+    /// <summary>
+    /// Charcoal of the shield generators. Its fuel switch removes by item name, so the scope patch above already
+    /// lets the charcoal come from a chest; this only repeats the press up to the generator's capacity.
+    /// </summary>
+    [HarmonyPatch(typeof(ShieldGenerator), nameof(ShieldGenerator.OnAddFuel))]
+    internal static class ShieldGenerator_OnAddFuel_Fill_Patch
+    {
+        private static void Postfix(ShieldGenerator __instance, Switch sw, Humanoid user, bool __result)
+        {
+            if (!__result) return;
+
+            Plugin.FillToMax(__instance.m_nview, user, Plugin.StationName(__instance),
+                __instance.m_maxFuel, () => __instance.OnAddFuel(sw, user, null));
+        }
+    }
+
+    /// <summary>
+    /// Ammo of the ballistas. UseItem also serves trophies, which set the targets and return true as well: the ammo
+    /// count before and after tells a real load from one of those, so a trophy never starts a fill.
+    /// </summary>
+    [HarmonyPatch(typeof(Turret), nameof(Turret.UseItem))]
+    internal static class Turret_UseItem_Fill_Patch
+    {
+        private static void Prefix(Turret __instance, out int __state)
+        {
+            __state = __instance.GetAmmo();
+        }
+
+        private static void Postfix(Turret __instance, Humanoid user, bool __result, int __state)
+        {
+            if (!__result || __instance.GetAmmo() <= __state) return;
+
+            Plugin.FillToMax(__instance.m_nview, user, Plugin.StationName(__instance),
+                __instance.m_maxAmmo, () => __instance.UseItem(user, null));
+        }
+    }
+
+    /// <summary>Ballistas build their hover text themselves.</summary>
+    [HarmonyPatch(typeof(Turret), nameof(Turret.GetHoverText))]
+    internal static class Turret_GetHoverText_Patch
+    {
+        private static void Postfix(Turret __instance, ref string __result)
+        {
+            __result = Plugin.AppendFill(__instance, __result);
         }
     }
 
