@@ -3,8 +3,8 @@
   <PropertyGroup>
     <AssemblyName>ShipDismantle</AssemblyName>
     <RootNamespace>ShipDismantle</RootNamespace>
-    <Version>1.0.0</Version>
-    <Description>Dismantles and repairs ships with the hammer without a workbench nearby.</Description>
+    <Version>1.1.0</Version>
+    <Description>Dismantles a ship from its helm, materials straight into the inventory, and with the hammer without a workbench.</Description>
   </PropertyGroup>
 
   <ItemGroup>
