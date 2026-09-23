@@ -974,6 +974,24 @@ namespace PortalMenu
         }
     }
 
+    /// <summary>
+    /// Panel open: the wheel scrolls the list, so it must not zoom the camera at the same time. The game's zoom
+    /// sits in the middle of GameCamera.UpdateCamera, behind its own list of visibility checks, so it is simpler
+    /// to report no wheel movement at the source. The list keeps scrolling because Unity's UI reads the wheel
+    /// through the EventSystem's input module, never through ZInput.
+    /// </summary>
+    [HarmonyPatch(typeof(ZInput), nameof(ZInput.GetMouseScrollWheel))]
+    internal static class ZInput_GetMouseScrollWheel_Patch
+    {
+        private static bool Prefix(ref float __result)
+        {
+            if (!DestinationPanel.IsVisible()) return true;
+
+            __result = 0f;
+            return false;
+        }
+    }
+
     /// <summary>Panel open: the player no longer interacts nor uses the hotbar.</summary>
     [HarmonyPatch(typeof(Player), "TakeInput")]
     internal static class Player_TakeInput_Patch
