@@ -51,6 +51,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AttackCancel", "AttackCance
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NoStumps", "NoStumps\NoStumps.csproj", "{8D39DB15-E2ED-4481-A14F-A93279EF0764}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EasyTaming", "EasyTaming\EasyTaming.csproj", "{FACD2837-12AA-44BE-980E-45EB6F10D191}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -349,6 +351,18 @@ Global
 		{8D39DB15-E2ED-4481-A14F-A93279EF0764}.Release|x64.Build.0 = Release|Any CPU
 		{8D39DB15-E2ED-4481-A14F-A93279EF0764}.Release|x86.ActiveCfg = Release|Any CPU
 		{8D39DB15-E2ED-4481-A14F-A93279EF0764}.Release|x86.Build.0 = Release|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Debug|x64.Build.0 = Debug|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Debug|x86.Build.0 = Debug|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Release|x64.ActiveCfg = Release|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Release|x64.Build.0 = Release|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Release|x86.ActiveCfg = Release|Any CPU
+		{FACD2837-12AA-44BE-980E-45EB6F10D191}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
