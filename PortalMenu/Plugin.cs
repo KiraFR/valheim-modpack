@@ -812,7 +812,11 @@ namespace PortalMenu
             RectTransform area = NewRect("sliding area", rect);
             Stretch(area, 0f, 0f, 0f, 0f);
 
+            // Scrollbar drives the handle's anchors but never its offsets, and a fresh RectTransform starts
+            // 100x100 larger than its anchors: without this the handle spills over the list as a big block.
             RectTransform handleRect = NewRect("handle", area);
+            Stretch(handleRect, 0f, 0f, 0f, 0f);
+
             var handle = handleRect.gameObject.AddComponent<Image>();
             handle.color = new Color(0.82f, 0.76f, 0.62f, 0.75f);
 
