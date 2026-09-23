@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>ShipDismantle</AssemblyName>
     <RootNamespace>ShipDismantle</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <Description>Dismantles a ship, a battering ram or a cart from its controls, materials straight into the inventory.</Description>
   </PropertyGroup>
 

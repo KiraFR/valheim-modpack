@@ -34,7 +34,7 @@ namespace ShipDismantle
     {
         public const string PluginGuid = "valheim.shipdismantle";
         public const string PluginName = "ShipDismantle";
-        public const string PluginVersion = "1.2.0";
+        public const string PluginVersion = "1.3.0";
 
         internal static ManualLogSource Log;
 
@@ -243,6 +243,49 @@ namespace ShipDismantle
 
             __result = Dismantle.TryDismantle(player, __instance);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// A wagon's own switches: the catapult is aimed at through its loading point and its legs, which are Switch
+    /// objects in front of the Vagon, so hovering it never reaches the Vagon itself. Switch ignores the alternate
+    /// interaction as well; only the switches belonging to a wagon are taken over, so levers and the ballista
+    /// keep their vanilla behaviour.
+    /// </summary>
+    [HarmonyPatch(typeof(Switch), nameof(Switch.Interact))]
+    internal static class Switch_Interact_Patch
+    {
+        private static bool Prefix(Switch __instance, Humanoid character, bool hold, bool alt, ref bool __result)
+        {
+            if (!Plugin.Enabled.Value || !Plugin.Wagons.Value || !alt || hold) return true;
+            if (!(character is Player player) || player != Player.m_localPlayer) return true;
+
+            Vagon wagon = __instance.GetComponentInParent<Vagon>();
+            if (wagon == null) return true;
+
+            if (wagon.IsAttached() || wagon.InUse())
+            {
+                player.Message(MessageHud.MessageType.Center, "Someone is using it");
+                __result = false;
+                return false;
+            }
+
+            __result = Dismantle.TryDismantle(player, wagon);
+            return false;
+        }
+    }
+
+    /// <summary>Hover: the dismantle key under a wagon switch's vanilla text.</summary>
+    [HarmonyPatch(typeof(Switch), nameof(Switch.GetHoverText))]
+    internal static class Switch_GetHoverText_Patch
+    {
+        private static void Postfix(Switch __instance, ref string __result)
+        {
+            if (!Plugin.Enabled.Value || !Plugin.Wagons.Value || !Plugin.ShowHint.Value) return;
+            if (string.IsNullOrEmpty(__result) || __instance.GetComponentInParent<Vagon>() == null) return;
+
+            __result += "\n[<color=yellow><b>" + Plugin.AltKeyLabel() + " + " + Localization.instance.Localize("$KEY_Use") +
+                        "</b></color>] Dismantle";
         }
     }
 
