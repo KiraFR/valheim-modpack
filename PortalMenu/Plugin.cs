@@ -43,6 +43,7 @@ namespace PortalMenu
         internal static ConfigEntry<float> PanelWidth;
         internal static ConfigEntry<float> PanelHeight;
         internal static ConfigEntry<float> Scale;
+        internal static ConfigEntry<float> ScrollRows;
         internal static ConfigEntry<string> BackgroundColor;
 
         private Harmony _harmony;
@@ -104,6 +105,11 @@ namespace PortalMenu
                     "set in the game options; this is applied on top. 1.5 = half again as large.",
                     new AcceptableValueRange<float>(0.5f, 3f)));
             MigrateKey(Scale, "Affichage", "Echelle");
+
+            ScrollRows = Config.Bind("Display", "ScrollRows", 4f,
+                new ConfigDescription(
+                    "How many rows one mouse wheel notch scrolls. Raise it to go through a long list faster.",
+                    new AcceptableValueRange<float>(1f, 12f)));
 
             BackgroundColor = Config.Bind("Display", "BackgroundColor", "17120CF2",
                 "Panel background colour, in hexadecimal RRGGBB or RRGGBBAA (AA = opacity, FF = opaque).");
@@ -316,6 +322,7 @@ namespace PortalMenu
         private const float FooterHeight = 34f;
         private const float RowHeight = 34f;
         private const float Margin = 12f;
+        private const float ScrollbarWidth = 10f;
 
         /// <summary>Above the HUD (hover text, center messages), which otherwise draws in front of the panel.</summary>
         private const int SortingOrder = 5000;
@@ -331,6 +338,9 @@ namespace PortalMenu
         private static TeleportWorld _portal;
         private static ZDOID _portalId;
         private static readonly List<GameObject> _rows = new List<GameObject>();
+
+        /// <summary>True while Show is running, so a same-frame server answer does not fill the list twice.</summary>
+        private static bool _opening;
 
         internal static bool IsVisible()
         {
@@ -366,7 +376,16 @@ namespace PortalMenu
                 ownCanvas.sortingOrder = SortingOrder;
             }
 
-            PortalNetwork.Request();
+            // Hosting or solo, the request loops straight back to us and answers before Request returns.
+            _opening = true;
+            try
+            {
+                PortalNetwork.Request();
+            }
+            finally
+            {
+                _opening = false;
+            }
             Fill();
         }
 
@@ -407,7 +426,7 @@ namespace PortalMenu
         /// <summary>The server list has just arrived: redraw if the panel is open.</summary>
         internal static void OnPortalsUpdated()
         {
-            if (IsVisible()) Fill();
+            if (IsVisible() && !_opening) Fill();
         }
 
         // -------------------------------------------------------------- content
@@ -473,7 +492,12 @@ namespace PortalMenu
         {
             foreach (GameObject row in _rows)
             {
-                if (row != null) UnityEngine.Object.Destroy(row);
+                if (row == null) continue;
+
+                // Destroy only runs at the end of the frame, and until then the row still counts in the layout,
+                // which would leave the list scrollable far past its content. Unparent it right away.
+                row.transform.SetParent(null, worldPositionStays: false);
+                UnityEngine.Object.Destroy(row);
             }
             _rows.Clear();
         }
@@ -675,9 +699,11 @@ namespace PortalMenu
             _hint.color = new Color(0.9f, 0.72f, 0.4f);
 
             // Scrolling area
+            float listTop = Margin * 0.5f + TitleHeight + WarningHeight + 4f;
+            float listBottom = Margin + FooterHeight + 8f;
+
             RectTransform viewport = NewRect("viewport", root);
-            Stretch(viewport, Margin, Margin, Margin * 0.5f + TitleHeight + WarningHeight + 4f,
-                Margin + FooterHeight + 8f);
+            Stretch(viewport, Margin, Margin + ScrollbarWidth + 4f, listTop, listBottom);
             var mask = viewport.gameObject.AddComponent<Image>();
             mask.color = new Color(0f, 0f, 0f, 0.25f);
             viewport.gameObject.AddComponent<RectMask2D>();
@@ -706,7 +732,8 @@ namespace PortalMenu
             _scroll.horizontal = false;
             _scroll.vertical = true;
             _scroll.movementType = ScrollRect.MovementType.Clamped;
-            _scroll.scrollSensitivity = 28f;
+            _scroll.verticalScrollbar = NewScrollbar(root, listTop, listBottom);
+            _scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
 
             // Footer: three buttons of equal width, to follow the configured panel width
             RectTransform footer = NewRect("footer", root);
@@ -736,6 +763,7 @@ namespace PortalMenu
             if (_root == null) return;
             ((RectTransform)_root.transform).sizeDelta =
                 new Vector2(Plugin.PanelWidth.Value, Plugin.PanelHeight.Value);
+            if (_scroll != null) _scroll.scrollSensitivity = RowHeight * Plugin.ScrollRows.Value;
             _root.transform.localScale = Vector3.one * Plugin.Scale.Value;
         }
 
@@ -763,6 +791,43 @@ namespace PortalMenu
 
             button.onClick.AddListener(action);
             return text;
+        }
+
+        /// <summary>
+        /// Draggable scrollbar along the right edge of the list. Parented to the panel rather than to the
+        /// viewport, so the viewport's mask never clips it and scrolling never moves it.
+        /// </summary>
+        private static Scrollbar NewScrollbar(RectTransform parent, float top, float bottom)
+        {
+            RectTransform rect = NewRect("scrollbar", parent);
+            rect.anchorMin = new Vector2(1f, 0f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(1f, 0.5f);
+            rect.offsetMin = new Vector2(-Margin - ScrollbarWidth, bottom);
+            rect.offsetMax = new Vector2(-Margin, -top);
+
+            var track = rect.gameObject.AddComponent<Image>();
+            track.color = new Color(1f, 1f, 1f, 0.07f);
+
+            RectTransform area = NewRect("sliding area", rect);
+            Stretch(area, 0f, 0f, 0f, 0f);
+
+            RectTransform handleRect = NewRect("handle", area);
+            var handle = handleRect.gameObject.AddComponent<Image>();
+            handle.color = new Color(0.82f, 0.76f, 0.62f, 0.75f);
+
+            var scrollbar = rect.gameObject.AddComponent<Scrollbar>();
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+            scrollbar.handleRect = handleRect;
+            scrollbar.targetGraphic = handle;
+
+            ColorBlock colors = scrollbar.colors;
+            colors.highlightedColor = new Color(1f, 0.92f, 0.7f, 1f);
+            colors.pressedColor = new Color(1f, 0.85f, 0.5f, 1f);
+            colors.fadeDuration = 0.08f;
+            scrollbar.colors = colors;
+
+            return scrollbar;
         }
 
         private static RectTransform NewRect(string name, Transform parent)
