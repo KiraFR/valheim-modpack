@@ -57,11 +57,11 @@ param(
 )
 
 # Mods needed on a dedicated server: StackMax (chests clamp stacks server-side), PortalMenu (only the server knows
-# every portal in the world), QuickBrew and GrowTime (the server permanently owns the barrels and plants around the
-# world spawn), BerryFarm (its saplings are prefabs the server must know to load and grow them) and PartialSleep
+# every portal in the world), QuickBrew, GrowTime and NoStumps (the server permanently owns the barrels, plants and
+# trees around the world spawn), BerryFarm (its saplings are prefabs the server must know to load and grow them) and PartialSleep
 # (only the server decides when the night is skipped).
 # The other mods are client-only, so the menu does not offer them.
-$ServerMods = @('StackMax', 'PortalMenu', 'QuickBrew', 'GrowTime', 'BerryFarm', 'PartialSleep', 'InfiniteTorch')
+$ServerMods = @('StackMax', 'PortalMenu', 'QuickBrew', 'GrowTime', 'BerryFarm', 'PartialSleep', 'InfiniteTorch', 'NoStumps')
 
 # ===== BEGIN SHARED BLOCK: identical in install.ps1 and install-server.ps1, checked by CI =====
 # Each script works on its own through irm | iex, so the functions are shared by copy. Change both files together.
