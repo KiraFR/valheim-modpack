@@ -3,8 +3,8 @@
   <PropertyGroup>
     <AssemblyName>ShipDismantle</AssemblyName>
     <RootNamespace>ShipDismantle</RootNamespace>
-    <Version>1.1.0</Version>
-    <Description>Dismantles a ship from its helm, materials straight into the inventory, and with the hammer without a workbench.</Description>
+    <Version>1.2.0</Version>
+    <Description>Dismantles a ship, a battering ram or a cart from its controls, materials straight into the inventory.</Description>
   </PropertyGroup>
 
   <ItemGroup>

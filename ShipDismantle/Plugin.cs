@@ -9,21 +9,23 @@ using UnityEngine;
 namespace ShipDismantle
 {
     /// <summary>
-    /// Dismantles a ship from its helm, materials straight into the inventory, and lifts the workbench requirement
-    /// when dismantling or repairing a ship with the hammer.
+    /// Dismantles a ship or a wagon from its own controls, materials straight into the inventory, and lifts the
+    /// workbench requirement when dismantling or repairing a ship with the hammer.
     ///
-    /// - Helm action: the rudder (ShipControlls) already receives the alternate interaction (Shift + E) and ignores it,
-    ///   so the mod takes it over. It avoids the hammer entirely: Player.RemovePiece needs a piece within 5 m of the
-    ///   eye through a raycast, which a hull in the water often refuses, and it drops everything at the ship's position.
+    /// - The action: the rudder (ShipControlls) and the wagon (Vagon, which the cart, the battering ram and the
+    ///   catapult all share) already receive the alternate interaction (Shift + E) and ignore it, so the mod takes it
+    ///   over. It avoids the hammer entirely: Player.RemovePiece needs a piece within 5 m of the eye through a
+    ///   raycast, which a hull in the water often refuses, and it drops everything at the vehicle's position.
     ///   Here the materials of Piece.m_resources are added to the inventory (what does not fit drops at the player's
-    ///   feet) and the ship is destroyed with WearNTear.Remove(blockDrop: true), so nothing falls into the water.
+    ///   feet) and the vehicle is destroyed with WearNTear.Remove(blockDrop: true), so nothing falls into the water.
     /// - Hammer: Player.RemovePiece and Player.Repair both go through Player.CheckCanRemovePiece, which refuses a piece
     ///   whose m_craftingStation (the workbench for the raft, karve and longship) is not in range. The mod lets that
     ///   check pass for pieces carrying a Ship, which is how Piece.CanBeRemoved finds one.
     /// - Kept from vanilla: wards (PrivateArea), the cargo must be empty, and the vanilla amounts, one third for a
-    ///   ship the players did not build.
+    ///   vehicle the players did not build. A ship with someone else aboard and a wagon someone is pulling or
+    ///   browsing are refused.
     ///
-    /// Multiplayer: WearNTear.Remove is an RPC to the ship's owner, which may be another player or the dedicated
+    /// Multiplayer: WearNTear.Remove is an RPC to the vehicle's owner, which may be another player or the dedicated
     /// server; the owner destroys it without checking anything, so the mod stays client only. The materials are added
     /// locally to the player's own inventory. Neither the server nor the other players need the mod.
     /// </summary>
@@ -32,12 +34,13 @@ namespace ShipDismantle
     {
         public const string PluginGuid = "valheim.shipdismantle";
         public const string PluginName = "ShipDismantle";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.2.0";
 
         internal static ManualLogSource Log;
 
         internal static ConfigEntry<bool> Enabled;
         internal static ConfigEntry<bool> HelmDismantle;
+        internal static ConfigEntry<bool> Wagons;
         internal static ConfigEntry<bool> ShowHint;
         internal static ConfigEntry<bool> Hammer;
         internal static ConfigEntry<bool> Repair;
@@ -58,8 +61,12 @@ namespace ShipDismantle
                 "Dismantles the ship with the alternate interaction on its helm (Shift + E by default): the materials " +
                 "go straight into your inventory instead of falling into the water, and no hammer is needed.");
 
+            Wagons = Config.Bind("General", "Wagons", true,
+                "Dismantles wagons the same way: the battering ram, the catapult and the cart, which the game all " +
+                "builds on the same Vagon. They too need a workbench in vanilla.");
+
             ShowHint = Config.Bind("General", "ShowHint", true,
-                "Adds the dismantle key under the helm's hover text.");
+                "Adds the dismantle key under the helm's and the wagon's hover text.");
 
             Hammer = Config.Bind("General", "Hammer", true,
                 "Dismantles ships with the hammer without a workbench nearby (vanilla behaviour otherwise: the " +
@@ -93,51 +100,43 @@ namespace ShipDismantle
         }
     }
 
-    /// <summary>Takes the ship apart and hands its materials to the player.</summary>
+    /// <summary>Takes a ship or a wagon apart and hands its materials to the player.</summary>
     internal static class Dismantle
     {
-        /// <summary>Tries to dismantle the ship for that player, telling them why when it refuses.</summary>
-        internal static bool TryDismantle(Player player, Ship ship)
+        /// <summary>Tries to dismantle that vehicle for the player, telling them why when it refuses.</summary>
+        internal static bool TryDismantle(Player player, Component vehicle)
         {
-            if (player == null || ship == null) return false;
+            if (player == null || vehicle == null) return false;
 
-            Piece piece = ship.GetComponentInParent<Piece>();
-            WearNTear wearNTear = ship.GetComponent<WearNTear>();
-            ZNetView nview = ship.m_nview;
+            Piece piece = vehicle.GetComponentInParent<Piece>();
+            WearNTear wearNTear = piece != null ? piece.GetComponent<WearNTear>() : null;
+            ZNetView nview = piece != null ? piece.GetComponent<ZNetView>() : null;
             if (piece == null || wearNTear == null || nview == null || !nview.IsValid())
             {
-                player.Message(MessageHud.MessageType.Center, "This ship cannot be dismantled");
+                player.Message(MessageHud.MessageType.Center, "This cannot be dismantled");
                 return false;
             }
 
-            if (!PrivateArea.CheckAccess(ship.transform.position))
+            if (!PrivateArea.CheckAccess(piece.transform.position))
             {
                 player.Message(MessageHud.MessageType.Center, "$msg_privatezone");
                 return false;
             }
 
-            Container cargo = ship.GetComponentInChildren<Container>();
+            Container cargo = piece.GetComponentInChildren<Container>();
             if (cargo != null && cargo.GetInventory().NrOfItems() > 0)
             {
                 player.Message(MessageHud.MessageType.Center, "Empty the cargo first");
                 return false;
             }
 
-            foreach (Player aboard in ship.m_players)
-            {
-                if (aboard != null && aboard != player)
-                {
-                    player.Message(MessageHud.MessageType.Center, "Someone else is aboard");
-                    return false;
-                }
-            }
-
+            string name = Localization.instance.Localize(piece.m_name);
             List<KeyValuePair<GameObject, int>> refund = Refund(piece);
 
-            // The ship goes first: the owner destroys it, and only then are the materials handed out, so a refused
-            // removal cannot leave the player with both the ship and its materials.
+            // The vehicle goes first: the owner destroys it, and only then are the materials handed out, so a refused
+            // removal cannot leave the player with both the vehicle and its materials.
             wearNTear.Remove(blockDrop: true);
-            piece.m_placeEffect.Create(ship.transform.position, Quaternion.identity, null, 1f, -1, player.GetZDOID());
+            piece.m_placeEffect.Create(piece.transform.position, Quaternion.identity, null, 1f, -1, player.GetZDOID());
 
             int given = 0;
             bool dropped = false;
@@ -148,12 +147,12 @@ namespace ShipDismantle
             }
 
             player.Message(MessageHud.MessageType.Center, dropped
-                ? $"Ship dismantled, {given} materials recovered (inventory full, the rest is at your feet)"
-                : $"Ship dismantled, {given} materials recovered");
+                ? $"{name} dismantled, {given} materials recovered (inventory full, the rest is at your feet)"
+                : $"{name} dismantled, {given} materials recovered");
             return true;
         }
 
-        /// <summary>What the ship gives back, following the vanilla rules of Piece.DropResources.</summary>
+        /// <summary>What the vehicle gives back, following the vanilla rules of Piece.DropResources.</summary>
         private static List<KeyValuePair<GameObject, int>> Refund(Piece piece)
         {
             var refund = new List<KeyValuePair<GameObject, int>>();
@@ -210,8 +209,54 @@ namespace ShipDismantle
             if (!(character is Player player) || player != Player.m_localPlayer) return true;
             if (!__instance.InUseDistance(character)) return true;
 
-            __result = Dismantle.TryDismantle(player, __instance.m_ship);
+            Ship ship = __instance.m_ship;
+            foreach (Player aboard in ship.m_players)
+            {
+                if (aboard != null && aboard != player)
+                {
+                    player.Message(MessageHud.MessageType.Center, "Someone else is aboard");
+                    __result = false;
+                    return false;
+                }
+            }
+
+            __result = Dismantle.TryDismantle(player, ship);
             return false;
+        }
+    }
+
+    /// <summary>Wagons: the alternate interaction dismantles the cart or the siege machine, which also ignore it.</summary>
+    [HarmonyPatch(typeof(Vagon), nameof(Vagon.Interact))]
+    internal static class Vagon_Interact_Patch
+    {
+        private static bool Prefix(Vagon __instance, Humanoid character, bool hold, bool alt, ref bool __result)
+        {
+            if (!Plugin.Enabled.Value || !Plugin.Wagons.Value || !alt || hold) return true;
+            if (!(character is Player player) || player != Player.m_localPlayer) return true;
+
+            if (__instance.IsAttached() || __instance.InUse())
+            {
+                player.Message(MessageHud.MessageType.Center, "Someone is using it");
+                __result = false;
+                return false;
+            }
+
+            __result = Dismantle.TryDismantle(player, __instance);
+            return false;
+        }
+    }
+
+    /// <summary>Hover: the dismantle key under the wagon's vanilla "[E] Use".</summary>
+    [HarmonyPatch(typeof(Vagon), nameof(Vagon.GetHoverText))]
+    internal static class Vagon_GetHoverText_Patch
+    {
+        private static void Postfix(ref string __result)
+        {
+            if (!Plugin.Enabled.Value || !Plugin.Wagons.Value || !Plugin.ShowHint.Value) return;
+            if (string.IsNullOrEmpty(__result)) return;
+
+            __result += "\n[<color=yellow><b>" + Plugin.AltKeyLabel() + " + " + Localization.instance.Localize("$KEY_Use") +
+                        "</b></color>] Dismantle";
         }
     }
 
