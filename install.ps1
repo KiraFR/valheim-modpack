@@ -155,20 +155,23 @@ function Show-Menu([string]$title, [int]$count, [scriptblock]$label, [bool]$mult
     if (-not $checked) { $checked = New-Object bool[] $count }
     if ($multi) { $help = 'Up/Down: move   Space: check/uncheck   A: all   N: none   Enter: confirm   Esc: cancel' }
     else { $help = 'Up/Down: move   Enter: choose   Esc: cancel' }
-    $lines = $count + 2
-
     # Writes the title and reserves the menu lines, then records where they start. Reserving first means that if the
-    # console has to scroll, it does so now and $top stays valid for every redraw. Dot-sourced so $top is set here.
+    # console has to scroll, it does so now and $top stays valid for every redraw. Only as many items as the window can
+    # show are drawn ($visible), the list scrolling with the cursor: a menu taller than the window would put $top
+    # above the first line of the buffer. Dot-sourced so $visible, $lines and $top are set here.
     $startFrame = {
         param([bool]$clear)
         if ($clear) { [Console]::Clear() }
+        $visible = [Math]::Max(1, [Math]::Min($count, [Console]::WindowHeight - 6))
+        $lines = $visible + 2
         Write-Host ''
         Write-Host "  $title" -ForegroundColor Cyan
         for ($row = 0; $row -lt $lines; $row++) { Write-Host '' }
-        $top = [Console]::CursorTop - $lines
+        $top = [Math]::Max(0, [Console]::CursorTop - $lines)
     }
 
     $current = 0
+    $offset = 0
     $done = $false
     $cancelled = $false
     $dirty = $true
@@ -184,7 +187,10 @@ function Show-Menu([string]$title, [int]$count, [scriptblock]$label, [bool]$mult
                 # Measured at every draw: every line is padded to the current width to erase the previous text, and
                 # cut before it, since a wrapped line would shift the lines below.
                 $width = [Math]::Max(20, [Console]::WindowWidth - 1)
-                for ($row = 0; $row -lt $count; $row++) {
+                if ($current -lt $offset) { $offset = $current }
+                if ($current -ge $offset + $visible) { $offset = $current - $visible + 1 }
+                $offset = [Math]::Max(0, [Math]::Min($offset, $count - $visible))
+                for ($row = $offset; $row -lt $offset + $visible; $row++) {
                     $prefix = '    '
                     if ($row -eq $current) { $prefix = '  > ' }
                     if ($multi) {
@@ -192,13 +198,14 @@ function Show-Menu([string]$title, [int]$count, [scriptblock]$label, [bool]$mult
                     }
                     $text = $prefix + [string](& $label $row $checked[$row])
                     if ($text.Length -gt $width) { $text = $text.Substring(0, $width - 3) + '...' }
-                    [Console]::SetCursorPosition(0, $top + $row)
+                    [Console]::SetCursorPosition(0, $top + $row - $offset)
                     if ($row -eq $current) { Write-Host $text.PadRight($width) -NoNewline -ForegroundColor Yellow }
                     else { Write-Host $text.PadRight($width) -NoNewline }
                 }
                 $text = '  ' + $help
+                if ($visible -lt $count) { $text = "  [$($offset + 1)-$($offset + $visible) of $count]  " + $help }
                 if ($text.Length -gt $width) { $text = $text.Substring(0, $width) }
-                [Console]::SetCursorPosition(0, $top + $count + 1)
+                [Console]::SetCursorPosition(0, $top + $visible + 1)
                 Write-Host $text.PadRight($width) -NoNewline -ForegroundColor DarkGray
             }
 
