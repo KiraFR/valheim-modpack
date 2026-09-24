@@ -61,9 +61,9 @@ param(
 # trees around the world spawn), BerryFarm (its saplings are prefabs the server must know to load and grow them) and PartialSleep
 # (only the server decides when the night is skipped) and EasyTaming (the server owns the creatures around the
 # world spawn, and only the owner tames, feeds, breeds and grows them) and FriendlyBallista (only the owner of a
-# ballista picks its targets).
+# ballista picks its targets) and BigPillars (its x3 pieces are prefabs the server must know to load them).
 # The other mods are client-only, so the menu does not offer them.
-$ServerMods = @('StackMax', 'PortalMenu', 'QuickBrew', 'GrowTime', 'BerryFarm', 'PartialSleep', 'InfiniteTorch', 'NoStumps', 'EasyTaming', 'FriendlyBallista')
+$ServerMods = @('StackMax', 'PortalMenu', 'QuickBrew', 'GrowTime', 'BerryFarm', 'PartialSleep', 'InfiniteTorch', 'NoStumps', 'EasyTaming', 'FriendlyBallista', 'BigPillars')
 
 # ===== BEGIN SHARED BLOCK: identical in install.ps1 and install-server.ps1, checked by CI =====
 # Each script works on its own through irm | iex, so the functions are shared by copy. Change both files together.
