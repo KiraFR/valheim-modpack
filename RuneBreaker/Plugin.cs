@@ -23,6 +23,9 @@ namespace RuneBreaker
     ///   to the player hitting it. When it breaks, that player drops the stone items and sends an RPC to everybody on
     ///   the proxy: each peer plays the destruction effect and removes its own copy, and the proxy's owner sets the bit.
     /// - Boss altars (BossStone) and stones sitting on a networked object are left alone.
+    /// - Once every stone of a location is broken, its no-build zone is lifted (LiftNoBuild): Location.m_noBuild is
+    ///   cleared on the local copy of the location, which is what Location.IsInsideNoBuildLocation reads for
+    ///   building and terrain editing. The prefab asset keeps its value, so it is redone on each spawn.
     ///
     /// Multiplayer: install it for every player (a player without the mod keeps seeing the stones) and on the
     /// dedicated server, which permanently owns the locations around the world spawn and must record the bit there.
@@ -32,7 +35,7 @@ namespace RuneBreaker
     {
         public const string PluginGuid = "valheim.runebreaker";
         public const string PluginName = "RuneBreaker";
-        public const string PluginVersion = "1.0.0";
+        public const string PluginVersion = "1.1.0";
 
         internal static ManualLogSource Log;
 
@@ -42,6 +45,7 @@ namespace RuneBreaker
         internal static ConfigEntry<float> Health;
         internal static ConfigEntry<int> MinToolTier;
         internal static ConfigEntry<int> StoneDrop;
+        internal static ConfigEntry<bool> LiftNoBuild;
 
         private Harmony _harmony;
 
@@ -65,6 +69,9 @@ namespace RuneBreaker
 
             StoneDrop = Config.Bind("General", "StoneDrop", 10,
                 "Stone items dropped by a broken stone (0 = none).");
+
+            LiftNoBuild = Config.Bind("General", "LiftNoBuild", true,
+                "Once every stone of a location is broken, building and terrain editing are allowed around it.");
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll(typeof(Plugin).Assembly);
@@ -129,12 +136,29 @@ namespace RuneBreaker
                 else if (i < 64 && IsBreakable(stone, proxy.transform))
                     stone.gameObject.AddComponent<BreakableStone>().Init(proxy, i);
             }
+            RefreshNoBuild(proxy, stones.Count, broken);
+        }
+
+        /// <summary>Lifts the location's no-build zone when all of its stones are broken.</summary>
+        private static void RefreshNoBuild(LocationProxy proxy, int stoneCount, long broken)
+        {
+            if (!Plugin.LiftNoBuild.Value || stoneCount == 0 || stoneCount > 64) return;
+
+            long all = stoneCount == 64 ? -1L : (1L << stoneCount) - 1;
+            if ((broken & all) != all) return;
+
+            Location location = proxy.m_instance.GetComponent<Location>();
+            if (location != null) location.m_noBuild = false;
         }
 
         /// <summary>RPC received by every peer that has the location loaded.</summary>
         internal static void OnBreak(LocationProxy proxy, int index)
         {
             if (index < 0 || index >= 64) return;
+
+            ZNetView nview = proxy.m_nview;
+            ZDO zdo = nview.IsValid() ? nview.GetZDO() : null;
+            long broken = (zdo != null ? zdo.GetLong(BrokenKey) : 0L) | (1L << index);
 
             if (proxy.m_instance != null)
             {
@@ -146,14 +170,11 @@ namespace RuneBreaker
                     _destroyedEffect?.Create(t.position, t.rotation);
                     Object.Destroy(t.gameObject);
                 }
+                RefreshNoBuild(proxy, stones.Count, broken);
             }
 
-            ZNetView nview = proxy.m_nview;
-            if (nview.IsValid() && nview.IsOwner())
-            {
-                ZDO zdo = nview.GetZDO();
-                zdo.Set(BrokenKey, zdo.GetLong(BrokenKey) | (1L << index));
-            }
+            if (zdo != null && nview.IsOwner())
+                zdo.Set(BrokenKey, broken);
         }
 
         internal static void PlayHitEffect(Vector3 point)

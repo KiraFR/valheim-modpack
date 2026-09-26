@@ -3,7 +3,7 @@
   <PropertyGroup>
     <AssemblyName>RuneBreaker</AssemblyName>
     <RootNamespace>RuneBreaker</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Description>Rune stones and Vegvisirs can be broken with a pickaxe, for good and for every player.</Description>
   </PropertyGroup>
 
