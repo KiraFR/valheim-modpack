@@ -65,6 +65,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LagGuardClient", "LagGuardC
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RuneBreaker", "RuneBreaker\RuneBreaker.csproj", "{667B6243-D767-4B6A-B2F7-2329F0FBCE3F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShieldOutline", "ShieldOutline\ShieldOutline.csproj", "{962ED747-A113-4E59-95D3-70DFAC76749D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -447,6 +449,18 @@ Global
 		{667B6243-D767-4B6A-B2F7-2329F0FBCE3F}.Release|x64.Build.0 = Release|Any CPU
 		{667B6243-D767-4B6A-B2F7-2329F0FBCE3F}.Release|x86.ActiveCfg = Release|Any CPU
 		{667B6243-D767-4B6A-B2F7-2329F0FBCE3F}.Release|x86.Build.0 = Release|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Debug|x64.Build.0 = Debug|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Debug|x86.Build.0 = Debug|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Release|x64.ActiveCfg = Release|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Release|x64.Build.0 = Release|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Release|x86.ActiveCfg = Release|Any CPU
+		{962ED747-A113-4E59-95D3-70DFAC76749D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
